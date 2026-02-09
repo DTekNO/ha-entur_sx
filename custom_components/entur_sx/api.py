@@ -90,15 +90,18 @@ class EnturSXApiClient:
         self,
         operator: str | None = None,
         lines: list[str] | None = None,
+        lang: str = "no",
     ) -> None:
         """Initialize the API client.
         
         Args:
             operator: Codespace (e.g., "SKY", "SOF")
             lines: List of line IDs to monitor
+            lang: Preferred language code ("no" or "en")
         """
         self._operator = operator
         self._lines = lines or []
+        self._lang = lang
         self._session: aiohttp.ClientSession | None = None
         self._rate_limiter = RateLimitTracker()
 
@@ -114,6 +117,61 @@ class EnturSXApiClient:
     def set_session(self, session: aiohttp.ClientSession) -> None:
         """Set the aiohttp session."""
         self._session = session
+
+    def _select_text_by_language(self, text_objects: list[dict[str, Any]]) -> str:
+        """Select best text from array based on language preference.
+        
+        The Entur API returns Summary and Description as arrays of objects with:
+        - 'value': the text content
+        - Language codes in various formats:
+          * 'xml:lang' attribute (proper XML syntax, e.g., xml:lang="EN")
+          * 'lang' field (lowercase)
+          * 'Language' field (mixed case, sometimes inconsistent)
+        
+        Args:
+            text_objects: List of text objects from API (e.g., Summary or Description array)
+            
+        Returns:
+            Selected text string, or empty string if no text available
+        """
+        if not text_objects:
+            return ""
+        
+        # If only one text available, use it regardless of language
+        if len(text_objects) == 1:
+            return text_objects[0].get("value", "")
+        
+        # Try to find text in preferred language
+        preferred_lang = self._lang.lower()
+        for text_obj in text_objects:
+            # Check multiple possible language field names (API is inconsistent):
+            # - 'xml:lang' (proper XML attribute syntax)
+            # - 'lang' (alternative field name)
+            # - 'Language' (another variant)
+            lang_code = (
+                text_obj.get("xml:lang", "") or 
+                text_obj.get("lang", "") or 
+                text_obj.get("Language", "")
+            ).lower()
+            
+            if lang_code and lang_code.startswith(preferred_lang):
+                return text_obj.get("value", "")
+        
+        # If preferred language not found:
+        # - For Norwegian users: Just use first text (likely Norwegian anyway)
+        # - For English users: Try to find any English text before falling back
+        if preferred_lang != "no":
+            for text_obj in text_objects:
+                lang_code = (
+                    text_obj.get("xml:lang", "") or 
+                    text_obj.get("lang", "") or 
+                    text_obj.get("Language", "")
+                ).lower()
+                if lang_code and lang_code.startswith("en"):
+                    return text_obj.get("value", "")
+        
+        # Fall back to first available text
+        return text_objects[0].get("value", "")
 
     async def async_get_deviations(self) -> dict[str, Any]:
         """Fetch deviation data for configured lines.
@@ -349,12 +407,18 @@ class EnturSXApiClient:
                                 line_ref = line_ref_obj.get("value")
 
                                 if look_for == line_ref:
-                                    # Extract summary and description
+                                    # Extract summary and description with language selection
                                     summaries = element.get("Summary", [])
                                     descriptions = element.get("Description", [])
+                                    
+                                    # Ensure they are lists
+                                    if not isinstance(summaries, list):
+                                        summaries = [summaries] if summaries else []
+                                    if not isinstance(descriptions, list):
+                                        descriptions = [descriptions] if descriptions else []
 
-                                    summary = summaries[0].get("value") if summaries else STATE_NORMAL
-                                    description = descriptions[0].get("value") if descriptions else STATE_NORMAL
+                                    summary = self._select_text_by_language(summaries) or STATE_NORMAL
+                                    description = self._select_text_by_language(descriptions) or STATE_NORMAL
 
                                     items.append({
                                         "valid_from": start_time,

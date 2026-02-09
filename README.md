@@ -1,13 +1,19 @@
 # Entur Situation Exchange Custom Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/jm-cook/ha-entur_sx)
-[![Validate with HACS](https://github.com/jm-cook/ha-entur_sx/actions/workflows/validate.yaml/badge.svg)](https://github.com/jm-cook/ha-entur_sx/actions/workflows/validate.yaml)
-[![GitHub Release](https://img.shields.io/github/release/jm-cook/ha-entur_sx.svg)](https://github.com/jm-cook/ha-entur_sx/releases)
-![Project Maintenance](https://img.shields.io/maintenance/yes/2025.svg)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/DTekNO/ha-entur_sx)
+[![Validate with HACS](https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml/badge.svg)](https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml)
+[![GitHub Release](https://img.shields.io/github/release/DTekNO/ha-entur_sx.svg)](https://github.com/DTekNO/ha-entur_sx/releases)
+![Project Maintenance](https://img.shields.io/maintenance/yes/2026.svg)
 
-A Home Assistant custom integration for monitoring public transport service deviations from Entur.no.
+Stay ahead of transport delays and disruptions across Norway! This Home Assistant custom integration monitors real-time service deviations from Entur.no, alerting you to delays, cancellations, and route changes on your regular transit lines.
 
-This integration creates sensors for each monitored transit line, showing the current service status and any active deviations. It integrates directly with Home Assistant without requiring AppDaemon or MQTT.
+**Key Features:**
+- 🎨 **Beautiful Entur TravelTag badges** with transport mode icons (bus, train, tram, metro, ferry, etc.)
+- 📊 **Summary sensors** with numeric disruption counts for easy card visibility control
+- 🌍 **Automatic language support** (Norwegian/English) based on your Home Assistant settings
+- 📱 **Rich markdown formatting** with locale-aware dates and professional styling
+
+Get instant updates through dedicated sensors for each monitored line, showing current service status with authentic Entur Design System styling. 
 
 
 ## What is Entur Situation Exchange?
@@ -16,7 +22,7 @@ Entur is a Norwegian government-owned company that operates the national public 
 
 Example status message:
 
-<img width="1254" height="331" alt="image" src="https://github.com/user-attachments/assets/4c9749f8-eb2a-47ac-bccf-698e5c74eddf" />
+![Example status message](images/example_status_message.png)
 
 With this integration you can create sensors for just the routes you are interested in monitoring. This is useful if you use the same routes regularly and want a quick update before you leave your home, or you can get a notification on your mobile device.
 
@@ -29,7 +35,7 @@ With this integration you can create sensors for just the routes you are interes
 2. Click on "Integrations"
 3. Click the three dots in the top right corner
 4. Select "Custom repositories"
-5. Add the URL: `https://github.com/jm-cook/ha-entur_sx`
+5. Add the URL: `https://github.com/DTekNO/ha-entur_sx`
 6. Select category: "Integration"
 7. Click "Add"
 8. Search for "Entur Situation Exchange" in HACS
@@ -68,7 +74,9 @@ After installation, add the integration through the Home Assistant UI:
    - Shows line numbers with route names and transport mode
    - Example: "1 - Bergen lufthavn Flesland- Lagunen - Byparken (tram)"
 
-The integration will create one sensor for each selected line.
+The integration will create:
+- One sensor for each selected line
+- One summary sensor showing the total count of active disruptions (if enabled)
 
 ### Finding Line References
 
@@ -82,34 +90,112 @@ You can add multiple monitoring devices for different operators or groups of lin
 
 ## Use
 
+### Line Sensors
+
 The integration creates one sensor for each monitored line. Each sensor shows:
 
 - **State**: The current status summary (e.g., "Normal service" or description of the deviation)
+- **Entity Picture**: Automatically displays an Entur TravelTag-style badge with the transport mode icon and line number
 - **Attributes**:
   - `status`: Current status - `open` (active now), `planned` (scheduled), or `expired` (ended)
-  - `valid_from`: When the deviation started/starts (ISO timestamp)
-  - `valid_to`: When the deviation ends (ISO timestamp, may be null)
+  - `valid_from`: When the deviation started/starts (locale-formatted date/time)
+  - `valid_to`: When the deviation ends (locale-formatted date/time, may be null)
   - `description`: Detailed description of the deviation
   - `progress`: Raw progress value from API (OPEN, CLOSED, etc.)
   - `line_ref`: The line reference
+  - `formatted_content`: Markdown-formatted content with TravelTag badges (for markdown cards)
   - `all_deviations`: Array of all deviations if multiple exist
   - `total_deviations`: Count of all deviations
   - `deviations_by_status`: Count of deviations grouped by status
 
+### Summary Sensor
+
+If enabled, a summary sensor is created that aggregates all monitored lines:
+
+- **State**: Numeric count of active disruptions (0, 1, 2, etc.) - perfect for conditional card visibility
+- **Attributes**:
+  - `markdown_active`: Markdown with badges for all lines with active (open) disruptions
+  - `markdown_planned`: Markdown with badges for all lines with planned disruptions
+  - `lines`: List of all monitored lines
+
+The numeric state makes it easy to show/hide cards:
+```yaml
+type: conditional
+conditions:
+  - condition: numeric_state
+    entity: sensor.skyss_disruption_summary
+    above: 0
+card:
+  type: markdown
+  content: {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+```
+
+### Display with Markdown Cards
+
+#### Individual Line Disruptions
+
+The integration provides a `formatted_content` attribute that displays disruptions as Entur-styled TravelTag badges:
+
+```yaml
+type: markdown
+content: |
+  {{ state_attr('sensor.skyss_disruption_sky_line_1', 'formatted_content') }}
+```
+
+#### Summary of All Active Disruptions
+
+Use the summary sensor to show all active disruptions at once:
+
+```yaml
+type: conditional
+conditions:
+  - condition: numeric_state
+    entity: sensor.skyss_disruption_summary
+    above: 0
+card:
+  type: markdown
+  content: |
+    # 🚨 Active Transit Disruptions
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+```
+
+#### Planned Disruptions Preview
+
+```yaml
+type: markdown
+content: |
+  # 📅 Upcoming Disruptions
+  {{ state_attr('sensor.skyss_disruption_summary', 'markdown_planned') }}
+```
+
+**Badge Features:**
+- **Transport mode badges** with official Entur Design System colors and icons
+  - 12 transport modes: bus, train, tram, ferry, metro, mobility, bicycle, walk, plane, helicopter, taxi, carferry
+- **Line numbers** displayed in badges with proportional scaling
+- **Disruption summaries and descriptions** with clean formatting
+- **Validity periods** with locale-aware date formatting (Norwegian or English)
+- Professional styling matching Entur's TravelTag design
+
 ## Features
 
-- 🚌 Monitor multiple transit lines
-- 🔄 Automatic updates every 60 seconds
-- 🌐 Support for all Norwegian operators
-- 📊 Detailed deviation information in attributes
-- ⏰ **Status indicators** - planned, open, or expired deviations
-- 🕐 **Start and end times** - know exactly when deviations apply
-- 🎯 Clean entity IDs based on line references
-- 💡 Native Home Assistant integration (no AppDaemon or MQTT required)
-- ✨ **Dynamic operator and line discovery** - no need to look up codes manually!
-- 🎨 **User-friendly config flow** - select operators and lines from dropdown lists
-- 🔍 **Lowercase-safe progress detection** - handles API changes gracefully
-- 📝 **Disruption tracking log** - optional detailed logging of when disruptions appear and disappear
+- 🚌 **Monitor multiple transit lines** - Track unlimited lines across Norway
+- 🔄 **Automatic updates** - Refreshes every 60 seconds
+- 🌐 **All Norwegian operators** - Support for every public transport operator in Norway
+- 🎨 **Entur TravelTag badges** - Beautiful badges with transport mode icons and official Entur colors
+  - Entity pictures on line sensors
+  - Markdown badges in formatted_content
+  - 12 transport modes with authentic Entur Design System styling
+- 📊 **Summary sensor** - Numeric count of active disruptions for easy card visibility control
+- 🌍 **Language support** - Automatic Norwegian/English based on your Home Assistant language setting
+  - Norwegian: "Fra: Mandag, 09. februar kl. 14:30"
+  - English: "From: Monday, 09 February at 14:30"
+- ⏰ **Status indicators** - Planned, open, or expired deviations
+- 🕐 **Date/time formatting** - Locale-aware formatting for validity periods
+- 💡 **Native HA integration** - No AppDaemon or MQTT required
+- ✨ **Dynamic discovery** - Select operators and lines from dropdown lists, no manual code lookup
+- 🎯 **Clean entity IDs** - Based on line references
+- 🔍 **API redundancy** - Handles API changes gracefully
+- 📝 **Disruption tracking log** - Optional detailed logging of when disruptions appear and disappear
 
 ## Disruption Tracking Log
 
@@ -216,7 +302,10 @@ The smart back-off ensures the integration handles these situations gracefully w
 
 ## Example Dashboard Configuration
 
-### Basic Status Card
+### Basic Status Card with Badges
+
+Entity cards automatically show TravelTag badges as entity pictures:
+
 ```yaml
 type: entities
 title: Transit Status
@@ -226,46 +315,51 @@ entities:
   - entity: sensor.skyss_disruption_sky_line_20
 ```
 
-### Conditional Card (only show when deviations exist)
+### Summary Card (Show Only When Disruptions Exist)
+
+```yaml
+type: conditional
+conditions:
+  - condition: numeric_state
+    entity: sensor.skyss_disruption_summary
+    above: 0
+card:
+  type: markdown
+  title: 🚨 Active Transit Disruptions
+  content: |
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+```
+
+### Individual Line Detail Card
+
 ```yaml
 type: conditional
 conditions:
   - condition: state
-  entity: sensor.skyss_disruption_sky_line_1
+    entity: sensor.skyss_disruption_sky_line_1
     state_not: Normal service
 card:
   type: markdown
-  content: >
-  ## ⚠️ {{ states('sensor.skyss_disruption_sky_line_1') }}
-    
-  **Line:** {{ state_attr('sensor.skyss_disruption_sky_line_1', 'line_ref') }}
-    
-  **Status:** {{ state_attr('sensor.skyss_disruption_sky_line_1', 'status') }}
-    
-  **Valid from:** {{ state_attr('sensor.skyss_disruption_sky_line_1', 'valid_from') }}
-    
-  {% if state_attr('sensor.skyss_disruption_sky_line_1', 'valid_to') %}
-  **Valid to:** {{ state_attr('sensor.skyss_disruption_sky_line_1', 'valid_to') }}
-    {% endif %}
-    
-    **Description:**
-  {{ state_attr('sensor.skyss_disruption_sky_line_1', 'description') }}
+  content: |
+    {{ state_attr('sensor.skyss_disruption_sky_line_1', 'formatted_content') }}
 ```
 
 ### Show Only Active (Open) Deviations
+
 ```yaml
 type: conditional
 conditions:
   - condition: template
-  value_template: "{{ state_attr('sensor.skyss_disruption_sky_line_1', 'status') == 'open' }}"
+    value_template: "{{ state_attr('sensor.skyss_disruption_sky_line_1', 'status') == 'open' }}"
 card:
   type: markdown
-  content: >
+  content: |
     ## 🚨 Active Deviation on Line 1
-  {{ states('sensor.skyss_disruption_sky_line_1') }}
+    {{ state_attr('sensor.skyss_disruption_sky_line_1', 'formatted_content') }}
 ```
 
-### Multiple Lines with Icons
+### Glance Card with Multiple Lines
+
 ```yaml
 type: glance
 title: My Transit Lines
@@ -273,20 +367,44 @@ entities:
   - entity: sensor.skyss_disruption_sky_line_1
     name: Line 1
   - entity: sensor.skyss_disruption_sky_line_2
+    name: Line 2
   - entity: sensor.skyss_disruption_sky_line_20
     name: Line 20
+  - entity: sensor.skyss_disruption_summary
+    name: Total
 show_state: true
 ```
 
 ## Automations
 
-### Alert on Deviation
+### Alert When Any Disruption Becomes Active
+
+Using the summary sensor to monitor all lines at once:
+
 ```yaml
 automation:
-  - alias: "Transit Deviation Alert"
+  - alias: "Transit Disruption Alert"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.skyss_disruption_summary
+        above: 0
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "Transit Disruptions Detected"
+          message: >
+            {{ states('sensor.skyss_disruption_summary') }} active disruption(s).
+            Check Home Assistant for details.
+```
+
+### Alert on Specific Line Deviation
+
+```yaml
+automation:
+  - alias: "Transit Deviation Alert - Line 1"
     trigger:
       - platform: state
-  entity_id: sensor.skyss_disruption_sky_line_1
+        entity_id: sensor.skyss_disruption_sky_line_1
         attribute: status
         to: "open"
     condition:
@@ -303,12 +421,13 @@ automation:
 ```
 
 ### Alert on Planned Deviation (Get Advance Warning)
+
 ```yaml
 automation:
   - alias: "Planned Transit Deviation Alert"
     trigger:
       - platform: state
-  entity_id: sensor.skyss_disruption_sky_line_1
+        entity_id: sensor.skyss_disruption_sky_line_1
         attribute: status
         to: "planned"
     action:
@@ -327,7 +446,7 @@ If you're migrating from the AppDaemon version:
 
 1. Install this custom integration
 2. Configure it with the same lines you had in `apps.yaml`
-3. Update your dashboard cards to use the new entity IDs (format: `sensor.skyss_disruption_{operator}_line_{number}`)
+3. Update your dashboard cards to use the new entity IDs (format: `sensor.{device_name}_{operator}_line_{number}`)
 4. Update automations to use the new `status` attribute instead of checking state
 5. The MQTT sensors will become unavailable - you can safely remove them
 6. Uninstall the AppDaemon app
@@ -335,11 +454,16 @@ If you're migrating from the AppDaemon version:
 Key differences:
 - **No MQTT broker required**
 - **No AppDaemon required**
-- Entity IDs follow HA naming conventions: `sensor.skyss_disruption_sky_line_1` instead of `sensor.sky_line_1`
+- **TravelTag badges**: Beautiful badges on entity pictures and in markdown content
+- **Summary sensor**: Numeric count of active disruptions for all monitored lines
+- **Language support**: Automatic Norwegian/English based on HA settings
+- **Date formatting**: Locale-aware formatting (e.g., "Mandag, 09. februar kl. 14:30" vs ISO timestamps)
+- **formatted_content attribute**: Rich markdown with badges for use in markdown cards
+- Entity IDs follow HA naming conventions: `sensor.{device_name}_{operator}_line_{number}`
 - Attributes are directly on the sensor (no separate attribute topic)
 - UI-based configuration (no need to edit YAML files)
 - **No `include_future` setting** - all deviations are collected with `status` indicator
-- **New attributes**: `status` (planned/open/expired), `valid_to`, `progress`
+- **New attributes**: `status` (planned/open/expired), `valid_to`, `progress`, `formatted_content`
 - **Lowercase-safe progress detection** - handles API changes
 
 ## Known Limitations

@@ -1,0 +1,34 @@
+{%- if disruptions and disruptions | length > 0 -%}
+{#- Display disruptions as Entur TravelTag-style badges -#}
+{%- for disruption in disruptions %}
+{%- set transport_mode = disruption.get('transport_mode', 'bus') -%}
+{%- set line_name = disruption.get('line_name', '') -%}
+{%- set badge_svg = disruption.get('badge_svg', '') -%}
+{%- set summary = disruption.get('summary', 'Disruption') -%}
+{%- set description = disruption.get('description', '') -%}
+{%- set valid_from = disruption.get('valid_from_formatted', disruption.get('valid_from', '')) -%}
+{%- set valid_to = disruption.get('valid_to_formatted', disruption.get('valid_to', '')) -%}
+{%- set status = disruption.get('status', 'unknown') -%}
+
+{#- Entur TravelTag badge as SVG data URL -#}
+{%- if badge_svg %}
+<img src="{{ badge_svg }}" alt="{{ transport_mode }} {{ line_name }}" height="32">
+{%- endif %}
+
+**{{ summary }}**
+
+{%- if description %}
+
+{{ description }}
+{%- endif %}
+
+{%- if valid_from or valid_to %}
+*📅 {% if valid_from %}From: {{ valid_from }}{% endif %}{% if valid_from and valid_to %} • {% endif %}{% if valid_to %}To: {{ valid_to }}{% else %}{% if valid_from %}Until further notice{% endif %}{% endif %}*
+{%- endif %}
+
+---
+
+{%- endfor -%}
+{%- else -%}
+✓ **No active disruptions**
+{%- endif -%}

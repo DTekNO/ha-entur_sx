@@ -12,7 +12,30 @@ CONF_SUMMARY_ICON = "summary_icon"
 DEFAULT_DEVICE_NAME = "Entur Disruption"  # Fallback only, translations preferred
 DEFAULT_CREATE_SUMMARY_SENSORS = True
 DEFAULT_SUMMARY_ICON = "mdi:bus-alert"
+DEFAULT_LANG = "en"  # Default to English if HA language cannot be determined
 UPDATE_INTERVAL = 60  # seconds
+
+
+def normalize_language(language_code: str | None) -> str:
+    """Normalize Home Assistant language code to 'no' or 'en'.
+    
+    Args:
+        language_code: Language code from Home Assistant (e.g., 'en-US', 'nb-NO', 'nn-NO')
+        
+    Returns:
+        'no' for Norwegian variants (Bokmål, Nynorsk, Sámi), 'en' for all others
+    """
+    if not language_code:
+        return DEFAULT_LANG
+    
+    language_code = language_code.lower()
+    
+    # Norwegian: Bokmål (nb), Nynorsk (nn), or Sámi (se)
+    if language_code.startswith(("nb", "nn", "se")):
+        return "no"
+    
+    # Default to English for all other languages
+    return "en"
 
 # Back-off configuration for rate limiting
 BACKOFF_INITIAL = 120  # 2 minutes on first throttle

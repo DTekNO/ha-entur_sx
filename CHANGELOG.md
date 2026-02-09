@@ -1,0 +1,115 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2026.02.1]
+
+### Added
+- **🎨 Entur TravelTag Badges**: Professional transit line badges with official Entur Design System styling
+  - Automatically displayed as entity pictures on line sensors
+  - 12 transport mode icons: bus, train, tram, ferry, carferry, metro, mobility, bicycle, walk, plane, helicopter, taxi
+  - Official Entur brand colors for each transport mode
+  - Proportional scaling matching Entur's design (14pt base font, 26.25px icons)
+  - Line numbers displayed in badges with dynamic sizing
+  
+- **📊 Summary Sensor**: Aggregate sensor for all monitored lines
+  - Numeric state (0, 1, 2, etc.) showing count of active disruptions
+  - Perfect for conditional card visibility using `numeric_state` conditions
+  - `markdown_active` attribute: All active disruptions with badges in markdown format
+  - `markdown_planned` attribute: All planned disruptions with badges
+  - Easy automation: trigger when summary state goes above 0
+
+- **🌍 Automatic Language Support**: Norwegian and English based on Home Assistant settings
+  - Automatically detects language from `hass.config.language`
+  - Norwegian (no): Supports nb, nn, se language codes
+  - English (en): Default for all other languages
+  - Locale-aware date formatting:
+    - Norwegian: "Mandag, 09. februar kl. 14:30"
+    - English: "Monday, 09 February at 14:30"
+  - Smart API text selection handling multiple XML language tag formats
+
+- **📝 Rich Markdown Content**: `formatted_content` attribute on all line sensors
+  - TravelTag badges with line numbers and transport mode colors
+  - Disruption summaries and detailed descriptions
+  - Formatted validity periods with locale-aware dates
+  - Professional styling matching Entur's design language
+  - Ready for use in Home Assistant markdown cards
+
+### Changed
+- **Summary sensor state**: Now returns numeric count instead of text (e.g., `0` instead of "Normal service")
+- **Date formatting**: Valid from/to timestamps now locale-formatted instead of ISO 8601
+- **Language configuration**: Removed manual language setting - now automatically follows Home Assistant's language preference
+
+### Developer Notes
+- Added `icon_constants.py`: Transport mode icons and brand colors from Entur Design System
+- Added `templates/formatted_content.j2`: English markdown template
+- Added `templates/formatted_content_no.j2`: Norwegian markdown template  
+- Added `normalize_language()` function in `const.py` for language code mapping
+- Created standalone `badge_generator.py` tool for badge design and testing
+- Enhanced API client with `_select_text_by_language()` for robust multi-format XML parsing
+
+---
+
+## Release Notes Template
+
+Copy the section below for GitHub releases:
+
+---
+
+## 🎨 Major Update: TravelTag Badges, Summary Sensors & Language Support
+
+This release adds beautiful visual badges, aggregate disruption tracking, and automatic language support to make monitoring Norwegian transit disruptions even better!
+
+### ✨ What's New
+
+**🎨 Entur TravelTag Badges**
+- Professional transit line badges automatically appear on all line sensors
+- 12 transport modes with official Entur Design System colors and icons
+- Perfect proportional scaling matching Entur's design standards
+- Line numbers dynamically sized in badges
+
+**📊 Summary Sensor**
+- New aggregate sensor shows total active disruptions across all monitored lines
+- Numeric state (0, 1, 2, etc.) makes conditional card visibility easy
+- Rich markdown attributes (`markdown_active`, `markdown_planned`) with badges for all disrupted lines
+- Simple automation: trigger when summaries > 0
+
+**🌍 Automatic Language Support**
+- Norwegian and English templates based on your Home Assistant language setting
+- Beautiful locale-aware date formatting (e.g., "Mandag, 09. februar kl. 14:30")
+- Handles multiple API language tag formats automatically
+- No configuration needed - just works!
+
+**📱 Rich Markdown Content**
+- New `formatted_content` attribute on every sensor
+- Drop into markdown cards for instant professional displays
+- TravelTag badges with line info, summaries, and formatted dates
+- Perfect for dashboards and notifications
+
+### 🔧 Breaking Changes
+- Summary sensor state is now numeric (e.g., `0` not "Normal service") - update conditional cards to use `numeric_state` conditions
+- Removed manual language configuration option - now follows HA language automatically
+
+### 📸 Example
+
+```yaml
+type: conditional
+conditions:
+  - condition: numeric_state
+    entity: sensor.skyss_disruption_summary
+    above: 0
+card:
+  type: markdown
+  title: 🚨 Active Transit Disruptions
+  content: |
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+```
+
+### 🙏 Acknowledgments
+- Icons and colors from [Entur Design System](https://github.com/entur/design-system) (EUPL-1.2)
+- Design inspired by Entur's TravelTag component
+
+**Full Changelog**: See CHANGELOG.md

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import os
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
@@ -23,10 +24,216 @@ from .const import (
     STATUS_EXPIRED,
     STATUS_OPEN,
     STATUS_PLANNED,
+    normalize_language,
 )
 from .coordinator import EnturSXDataUpdateCoordinator
+from .icon_constants import TRANSPORT_COLORS, TRANSPORT_ICONS
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _async_load_template(hass: HomeAssistant, lang: str = "no") -> str | None:
+    """Load Jinja2 template asynchronously based on language."""
+    try:
+        # Choose template based on language
+        template_name = "formatted_content_no.j2" if lang == "no" else "formatted_content.j2"
+        
+        # Get the directory where this module is located
+        module_dir = os.path.dirname(__file__)
+        template_path = os.path.join(module_dir, "templates", template_name)
+
+        # Read template file asynchronously
+        def _read_template():
+            with open(template_path, encoding="utf-8") as f:
+                return f.read()
+
+        template_content = await hass.async_add_executor_job(_read_template)
+        _LOGGER.debug("Successfully loaded formatted_content template")
+        return template_content
+    except FileNotFoundError:
+        _LOGGER.warning(
+            "Template file not found: %s. Formatted content will not be available.",
+            template_path,
+        )
+        return None
+    except Exception as err:
+        _LOGGER.error(
+            "Failed to load formatted_content template: %s. Formatted content will not be available.",
+            err,
+            exc_info=True,
+        )
+        return None
+
+
+def _format_datetime_norwegian(dt: datetime) -> str:
+    """Format datetime in Norwegian.
+    
+    Args:
+        dt: datetime object to format
+        
+    Returns:
+        Formatted string like "Mandag, 19. januar kl. 12:00"
+    """
+    # Norwegian day names
+    norwegian_days = {
+        0: "mandag",
+        1: "tirsdag",
+        2: "onsdag",
+        3: "torsdag",
+        4: "fredag",
+        5: "lørdag",
+        6: "søndag"
+    }
+    
+    # Norwegian month names
+    norwegian_months = {
+        1: "januar",
+        2: "februar",
+        3: "mars",
+        4: "april",
+        5: "mai",
+        6: "juni",
+        7: "juli",
+        8: "august",
+        9: "september",
+        10: "oktober",
+        11: "november",
+        12: "desember"
+    }
+    
+    day_name = norwegian_days[dt.weekday()].capitalize()
+    month_name = norwegian_months[dt.month]
+    
+    return f"{day_name}, {dt.day:02d}. {month_name} kl. {dt.strftime('%H:%M')}"
+
+
+def _detect_transport_mode(line_ref: str) -> str:
+    """Detect transport mode from line reference.
+    
+    Entur line references follow pattern: Authority:Line:LineNumber
+    Examples:
+    - RUT:Line:1 (Oslo tram line 1)
+    - ATB:Line:3 (Trondheim bus line 3)
+    - NSB:Line:L1 (train)
+    
+    For now, use simple heuristics based on line number patterns.
+    Future: Could query Entur API for line details.
+    """
+    # Default to bus if uncertain
+    transport_mode = "bus"
+    
+    # Tram lines in Norway are typically numbered 11-19 or single digits 1-9 in Oslo
+    # Train lines often have 'L' prefix or are in higher ranges
+    # Ferry lines often contain 'F' or specific patterns
+    
+    line_parts = line_ref.split(":")
+    if len(line_parts) >= 3:
+        line_number = line_parts[-1].upper()
+        
+        # Train patterns
+        if line_number.startswith("L") or line_number.startswith("R"):
+            transport_mode = "train"
+        # Tram patterns (Oslo/Bergen)
+        elif line_number.isdigit() and 11 <= int(line_number) <= 19:
+            transport_mode = "tram"
+        # Metro patterns
+        elif line_number.isdigit() and 1 <= int(line_number) <= 6:
+            # Could be tram or metro - check authority
+            if "RUT" in line_ref:
+                transport_mode = "metro"
+            else:
+                transport_mode = "tram"
+    
+    return transport_mode
+
+
+def _create_badge_svg(transport_mode: str, line_name: str) -> str:
+    """Create a complete SVG badge as a data URL.
+    
+    Creates an Entur TravelTag-style badge with:
+    - Colored rounded rectangle background
+    - Transport mode icon (embedded from data URL)
+    - Line number text
+    
+    Uses proportional scaling system where all dimensions scale from text font size.
+    """
+    import base64
+    import re
+    
+    # Get icon and color from constants
+    icon_data_url = TRANSPORT_ICONS.get(transport_mode, TRANSPORT_ICONS["bus"])
+    bg_color = TRANSPORT_COLORS.get(transport_mode, TRANSPORT_COLORS["bus"])
+    
+    # Proportional scaling parameters - all dimensions scale from font size
+    TEXT_FONT_SIZE = 14
+    BADGE_HEIGHT_SCALE = 2.25
+    ICON_SIZE_SCALE = 1.875
+    PADDING_LEFT_SCALE = 0.625
+    PADDING_RIGHT_SCALE = 0.75
+    GAP_SCALE = 0.5
+    BORDER_RADIUS_SCALE = 0.375
+    TEXT_VERTICAL_OFFSET_SCALE = 0.125
+    ICON_VERTICAL_OFFSET_SCALE = 0
+    TEXT_FONT_WEIGHT = "500"
+    
+    # Calculate actual dimensions
+    badge_height = TEXT_FONT_SIZE * BADGE_HEIGHT_SCALE
+    icon_size = TEXT_FONT_SIZE * ICON_SIZE_SCALE
+    padding_left = TEXT_FONT_SIZE * PADDING_LEFT_SCALE
+    padding_right = TEXT_FONT_SIZE * PADDING_RIGHT_SCALE
+    gap = TEXT_FONT_SIZE * GAP_SCALE
+    border_radius = TEXT_FONT_SIZE * BORDER_RADIUS_SCALE
+    icon_vertical_offset = TEXT_FONT_SIZE * ICON_VERTICAL_OFFSET_SCALE
+    text_vertical_offset = TEXT_FONT_SIZE * TEXT_VERTICAL_OFFSET_SCALE
+    
+    # Extract the base64 content from icon data URL
+    icon_match = re.search(r'data:image/svg\+xml;base64,(.+)', icon_data_url)
+    if not icon_match:
+        return ""
+    
+    icon_base64 = icon_match.group(1)
+    icon_svg = base64.b64decode(icon_base64).decode('utf-8')
+    
+    # Extract just the SVG content (remove XML declaration and svg wrapper)
+    # We'll embed the paths directly
+    icon_content = ""
+    path_matches = re.findall(r'<(path|g|rect|circle|polygon)[^>]*>.*?</\1>|<(path|rect|circle|polygon)[^>]*/>', icon_svg, re.DOTALL)
+    if path_matches:
+        for match in path_matches:
+            # Find the full match in original string
+            for pattern in [r'<path[^>]*>.*?</path>', r'<path[^>]*/>',
+                           r'<g[^>]*>.*?</g>', r'<rect[^>]*/>',
+                           r'<circle[^>]*/>',  r'<polygon[^>]*/>', r'<polygon[^>]*>.*?</polygon>']:
+                found = re.search(pattern, icon_svg, re.DOTALL)
+                if found:
+                    content = found.group(0)
+                    # Replace any fill colors with white
+                    content = re.sub(r'fill="[^"]*"', 'fill="#FFFFFF"', content)
+                    icon_content += content
+    
+    # Calculate text width (approximate - proportional to font size)
+    char_width_ratio = 0.5625  # Characters are ~56.25% of font size width
+    text_width = len(line_name) * TEXT_FONT_SIZE * char_width_ratio
+    
+    # Calculate badge dimensions
+    badge_width = padding_left + icon_size + gap + text_width + padding_right
+    
+    # Calculate vertical positions with offsets for alignment
+    icon_y = (badge_height - icon_size) / 2 + icon_vertical_offset
+    text_y = badge_height / 2 + text_vertical_offset
+    
+    # Create the complete badge SVG
+    badge_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{badge_width}" height="{badge_height}" viewBox="0 0 {badge_width} {badge_height}">
+  <rect width="{badge_width}" height="{badge_height}" rx="{border_radius}" fill="{bg_color}"/>
+  <g transform="translate({padding_left}, {icon_y}) scale({icon_size / 16})">
+    {icon_content}
+  </g>
+  <text x="{padding_left + icon_size + gap}" y="{text_y}" font-family="system-ui, -apple-system, sans-serif" font-size="{TEXT_FONT_SIZE}" font-weight="{TEXT_FONT_WEIGHT}" fill="#FFFFFF" dominant-baseline="middle">{line_name}</text>
+</svg>'''
+    
+    # Encode as data URL
+    badge_base64 = base64.b64encode(badge_svg.encode('utf-8')).decode('utf-8')
+    return f"data:image/svg+xml;base64,{badge_base64}"
 
 
 async def async_setup_entry(
@@ -43,6 +250,12 @@ async def async_setup_entry(
     # (options takes precedence)
     config_data = {**entry.data, **entry.options}
     lines = config_data.get("lines_to_check", [])
+
+    # Get language from HA's setting
+    lang = normalize_language(hass.config.language)
+
+    # Load Jinja2 template asynchronously for formatted_content
+    template_content = await _async_load_template(hass, lang)
 
     # Clean up entities for lines that are no longer configured
     entity_registry = er.async_get(hass)
@@ -77,11 +290,11 @@ async def async_setup_entry(
     for line_ref in lines:
         # Clean the line name for entity ID (replace : with _)
         line_name = line_ref.replace(":", "_")
-        entities.append(EnturSXSensor(coordinator, entry, line_ref, line_name))
+        entities.append(EnturSXSensor(coordinator, entry, line_ref, line_name, template_content, lang))
 
     # Create summary sensor if configured
     if config_data.get("create_summary_sensors", False):
-        entities.append(EnturSXSummarySensor(coordinator, entry, lines))
+        entities.append(EnturSXSummarySensor(coordinator, entry, lines, lang))
 
     _LOGGER.info("Setting up %d Entur SX sensors", len(entities))
     # Update entities immediately with coordinator's existing data
@@ -102,6 +315,8 @@ class EnturSXSensor(
         entry: ConfigEntry,
         line_ref: str,
         line_name: str,
+        template_content: str | None,
+        lang: str = "no",
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
@@ -127,6 +342,99 @@ class EnturSXSensor(
 
         # Icon
         self._attr_icon = "mdi:bus-alert"
+
+        # Store pre-loaded template content
+        self._template_content = template_content
+        self._formatted_content_template = None
+        self._lang = lang
+        if template_content:
+            self._compile_template(template_content)
+
+        # Cache for badge SVG (generated once per line)
+        self._badge_svg_cache = None
+
+    @property
+    def entity_picture(self) -> str | None:
+        """Return the entity picture as a TravelTag badge."""
+        if self._badge_svg_cache is None:
+            # Generate badge once and cache it
+            transport_mode = _detect_transport_mode(self.line_ref)
+            line_name = self.line_ref.split(":")[-1]
+            self._badge_svg_cache = _create_badge_svg(transport_mode, line_name)
+        
+        return self._badge_svg_cache
+
+    def _compile_template(self, template_string: str) -> None:
+        """Compile Jinja2 template from string."""
+        try:
+            from jinja2 import Template
+
+            self._formatted_content_template = Template(template_string)
+            _LOGGER.debug("Successfully compiled formatted_content template for %s", self.line_ref)
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to compile formatted_content template: %s. Formatted content will not be available.",
+                err,
+                exc_info=True,
+            )
+            self._formatted_content_template = None
+
+    def _generate_formatted_content(self, disruptions: list[dict]) -> str:
+        """Generate formatted content from template."""
+        if self._formatted_content_template is None:
+            return "Template not available"
+        
+        if not disruptions:
+            disruptions = []
+        
+        # Detect transport mode for this line
+        transport_mode = _detect_transport_mode(self.line_ref)
+        line_name = self.line_ref.split(":")[-1]  # Extract just the line number
+        
+        # Create the badge SVG
+        badge_svg = _create_badge_svg(transport_mode, line_name)
+        
+        # Prepare disruption data with badge SVG and formatted dates
+        enriched_disruptions = []
+        for disruption in disruptions:
+            enriched = disruption.copy()
+            enriched["transport_mode"] = transport_mode
+            enriched["line_name"] = line_name
+            enriched["badge_svg"] = badge_svg
+            
+            # Format dates
+            valid_from = disruption.get("valid_from", "")
+            valid_to = disruption.get("valid_to", "")
+            
+            if valid_from:
+                try:
+                    from_dt = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
+                    if self._lang == "no":
+                        enriched["valid_from_formatted"] = _format_datetime_norwegian(from_dt)
+                    else:
+                        enriched["valid_from_formatted"] = from_dt.strftime("%A, %d %B at %H:%M")
+                except (ValueError, AttributeError):
+                    enriched["valid_from_formatted"] = valid_from
+            
+            if valid_to:
+                try:
+                    to_dt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
+                    if self._lang == "no":
+                        enriched["valid_to_formatted"] = _format_datetime_norwegian(to_dt)
+                    else:
+                        enriched["valid_to_formatted"] = to_dt.strftime("%A, %d %B at %H:%M")
+                except (ValueError, AttributeError):
+                    enriched["valid_to_formatted"] = valid_to
+            
+            enriched_disruptions.append(enriched)
+        
+        try:
+            return self._formatted_content_template.render(
+                disruptions=enriched_disruptions,
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to render formatted_content template: %s", err)
+            return f"Error rendering template: {err}"
 
     @property
     def native_value(self) -> str | None:
@@ -248,6 +556,9 @@ class EnturSXSensor(
                 status_counts[status] = status_counts.get(status, 0) + 1
             attrs["deviations_by_status"] = status_counts
 
+        # Add formatted_content for markdown card display
+        attrs["formatted_content"] = self._generate_formatted_content(line_data)
+
         return attrs
 
 
@@ -263,10 +574,12 @@ class EnturSXSummarySensor(
         coordinator: EnturSXDataUpdateCoordinator,
         entry: ConfigEntry,
         lines: list[str],
+        lang: str = "no",
     ) -> None:
         """Initialize the summary sensor."""
         super().__init__(coordinator)
         self.lines = lines
+        self._lang = lang
 
         device_name = entry.data.get(CONF_DEVICE_NAME, "Entur Disruption")
         config_data = {**entry.data, **entry.options}
@@ -291,10 +604,10 @@ class EnturSXSummarySensor(
         )
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> int:
         """Return simple state based on active (open) disruption count."""
         if not self.coordinator.data:
-            return STATE_NORMAL
+            return 0
 
         active_count = 0
         for line_ref in self.lines:
@@ -308,40 +621,42 @@ class EnturSXSummarySensor(
             if status == STATUS_OPEN:
                 active_count += 1
 
-        if active_count == 0:
-            return STATE_NORMAL
-        elif active_count == 1:
-            return "1 active disruption"
-        else:
-            return f"{active_count} active disruptions"
+        # Return numeric state for easy filtering/automation
+        return active_count
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes.
         
-        Includes separate markdown for active and planned disruptions.
+        Includes markdown_active and markdown_planned with TravelTag badges for each disrupted line.
         """
         if not self.coordinator.data:
+            no_planned = "Ingen planlagte avvik" if self._lang == "no" else "No planned disruptions"
             return {
                 "total_lines": len(self.lines),
                 "active_disruptions": 0,
                 "planned_disruptions": 0,
                 "normal_lines": len(self.lines),
                 "markdown_active": STATE_NORMAL,
-                "markdown_planned": "No planned disruptions",
+                "markdown_planned": no_planned,
             }
 
         active_lines = set()
         planned_lines = set()
         normal = []
-        active_details = []
-        planned_details = []
+        active_formatted = []
+        planned_formatted = []
 
         for line_ref in self.lines:
             line_data = self.coordinator.data.get(line_ref, [])
             if not line_data or line_data[0].get("summary") == STATE_NORMAL:
                 normal.append(line_ref)
                 continue
+
+            # Detect transport mode and create badge for this line
+            transport_mode = _detect_transport_mode(line_ref)
+            line_name = line_ref.split(":")[-1]
+            badge_svg = _create_badge_svg(transport_mode, line_name)
 
             # Track if this line has any non-expired deviations
             has_active = False
@@ -355,88 +670,106 @@ class EnturSXSummarySensor(
                 if status == STATUS_EXPIRED:
                     continue
 
-                # Build markdown for this disruption
-                line_markdown = f"### {line_ref}\n\n"
+                # Build formatted content with badge
                 summary = deviation.get("summary", "Unknown disruption")
-                line_markdown += f"**{summary}**\n\n"
-
-                # Add description
                 description = deviation.get("description", "")
-                if description:
-                    line_markdown += f"{description}\n\n"
-
-                # Add validity times
                 valid_from = deviation.get("valid_from", "")
                 valid_to = deviation.get("valid_to", "")
-                line_markdown += f"*From: {valid_from}*"
+                
+                # Format dates for display
+                valid_from_formatted = valid_from
+                valid_to_formatted = valid_to
+                
+                if valid_from:
+                    try:
+                        from_dt = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
+                        if self._lang == "no":
+                            valid_from_formatted = _format_datetime_norwegian(from_dt)
+                        else:
+                            valid_from_formatted = from_dt.strftime("%A, %d %B at %H:%M")
+                    except (ValueError, AttributeError):
+                        pass
+                
                 if valid_to:
-                    line_markdown += f" • *To: {valid_to}*\n\n"
+                    try:
+                        to_dt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
+                        if self._lang == "no":
+                            valid_to_formatted = _format_datetime_norwegian(to_dt)
+                        else:
+                            valid_to_formatted = to_dt.strftime("%A, %d %B at %H:%M")
+                    except (ValueError, AttributeError):
+                        pass
+                
+                formatted_markdown = f'<img src="{badge_svg}" alt="{transport_mode} {line_name}" height="28">\n\n'
+                formatted_markdown += f"**{summary}**\n\n"
+                if description:
+                    formatted_markdown += f"{description}\n\n"
+                
+                # Language-specific labels
+                if self._lang == "no":
+                    formatted_markdown += f"*📅 Fra: {valid_from_formatted}"
+                    if valid_to:
+                        formatted_markdown += f" • Til: {valid_to_formatted}*\n\n"
+                    else:
+                        formatted_markdown += " • Inntil videre*\n\n"
                 else:
-                    line_markdown += " • *Until further notice*\n\n"
-
-                # Add status/progress
-                progress = deviation.get('progress', 'unknown')
-                line_markdown += (
-                    f"*Status: {status}* • *Progress: {progress}*\n\n"
-                )
-                line_markdown += "---\n\n"
+                    formatted_markdown += f"*📅 From: {valid_from_formatted}"
+                    if valid_to:
+                        formatted_markdown += f" • To: {valid_to_formatted}*\n\n"
+                    else:
+                        formatted_markdown += " • Until further notice*\n\n"
+                formatted_markdown += "---\n\n"
 
                 # Categorize by status
                 if status == STATUS_OPEN:
                     has_active = True
                     active_lines.add(line_ref)
-                    active_details.append(line_markdown)
+                    active_formatted.append(formatted_markdown)
                 elif status == STATUS_PLANNED:
                     has_planned = True
                     planned_lines.add(line_ref)
-                    planned_details.append(line_markdown)
+                    planned_formatted.append(formatted_markdown)
                 else:
                     # Unknown status - include in active for safety
                     has_active = True
                     active_lines.add(line_ref)
-                    active_details.append(line_markdown)
+                    active_formatted.append(formatted_markdown)
 
             # If line has no non-expired deviations, mark as normal
             if not has_active and not has_planned:
                 normal.append(line_ref)
 
         # Build markdown for active disruptions
-        device_name = (
-            self.device_info.get("name", "Transit")
-            if self.device_info
-            else "Transit"
-        )
-
-        if not active_details:
+        if not active_formatted:
             markdown_active = STATE_NORMAL
         else:
-            markdown_active = (
-                f'**<ha-alert alert-type="error">'
-                f'<ha-icon icon="{self._attr_icon}"></ha-icon> '
-                f"{device_name} - Active Disruptions</ha-alert>**\n\n"
-            )
-            markdown_active += ''.join(active_details)
+            markdown_active = ''.join(active_formatted)
             if normal or planned_lines:
                 normal_count = len(normal) + len(planned_lines)
-                markdown_active += (
-                    f"*{normal_count} line(s) with normal service*\n"
-                )
+                if self._lang == "no":
+                    markdown_active += (
+                        f"\n*{normal_count} linje(r) med normal drift*\n"
+                    )
+                else:
+                    markdown_active += (
+                        f"\n*{normal_count} line(s) with normal service*\n"
+                    )
 
         # Build markdown for planned disruptions
-        if not planned_details:
-            markdown_planned = "No planned disruptions"
+        if not planned_formatted:
+            markdown_planned = "Ingen planlagte avvik" if self._lang == "no" else "No planned disruptions"
         else:
-            markdown_planned = (
-                f'**<ha-alert alert-type="info">'
-                f'<ha-icon icon="{self._attr_icon}"></ha-icon> '
-                f"{device_name} - Planned Disruptions</ha-alert>**\n\n"
-            )
-            markdown_planned += ''.join(planned_details)
+            markdown_planned = ''.join(planned_formatted)
             if normal or active_lines:
                 normal_count = len(normal) + len(active_lines)
-                markdown_planned += (
-                    f"*{normal_count} line(s) with normal service*\n"
-                )
+                if self._lang == "no":
+                    markdown_planned += (
+                        f"\n*{normal_count} linje(r) med normal drift*\n"
+                    )
+                else:
+                    markdown_planned += (
+                        f"\n*{normal_count} line(s) with normal service*\n"
+                    )
 
         return {
             "total_lines": len(self.lines),

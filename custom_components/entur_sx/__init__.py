@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import EnturSXApiClient
-from .const import DOMAIN
+from .const import DOMAIN, normalize_language
 from .coordinator import EnturSXDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,9 +24,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create API client - merge data and options for backward compatibility
     config_data = {**entry.data, **entry.options}
     
+    # Use HA's language setting
+    lang = normalize_language(hass.config.language)
+    
     api = EnturSXApiClient(
         operator=config_data.get("operator"),
         lines=config_data.get("lines_to_check", []),
+        lang=lang,
     )
 
     # Create coordinator
