@@ -39,12 +39,17 @@
 </tr>
 </table>
 
-**{{ summary }}**
-
 {%- if description %}
+<ha-alert alert-type="info" title="{{ summary }}">
 
 {{ description }}
-{%- endif %}
+
+</ha-alert>
+
+{% else %}
+**{{ summary }}**
+
+{% endif %}
 
 {%- endfor %}
 

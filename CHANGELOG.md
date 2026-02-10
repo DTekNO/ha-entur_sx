@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **🛡️ HTML Sanitizer**: Automatic cleanup of malformed HTML from API
+  - Fixes unclosed tags in operator-provided descriptions (e.g., `<ul>`, `<b>`, `<li>`)
+  - Prevents markdown rendering issues caused by broken HTML
+  - Smart inline tag closure when parent block elements close
+  - Preserves properly formatted HTML while fixing errors
+
+- **🎨 Enhanced Visual Layout**: Improved disruption display with Home Assistant components
+  - Descriptions now displayed in `<ha-alert>` boxes with summary as title
+  - Table-based date layout for better visual hierarchy
+  - Blue info boxes contain and isolate operator's HTML content
+  - Cleaner separation between multiple disruptions
+
+### Changed
+- **📋 Template-Based Rendering**: Summary sensor now uses Jinja2 templates
+  - Consistent rendering between individual line sensors and summary sensor
+  - All formatting logic centralized in templates for easier customization
+  - Automatic grouping of disruptions by line using `groupby` filter
+  - Cleaner Python code without HTML/markdown string concatenation
+
+- **🔧 Badge Display Improvements**: Higher quality badges in summary attributes
+  - Increased badge height from 28px to 32px for crisp display at natural size
+  - Fixed markdown indentation issues with proper separator formatting
+  - One badge per line with all disruptions grouped underneath
+
+- **🎯 Disruption Consolidation**: Multiple disruptions for same line now grouped together
+  - Single badge displayed per transit line
+  - All disruptions for that line stacked underneath
+  - Clear visual hierarchy with horizontal rules between different lines
+  - Eliminates duplicate badges for lines with multiple issues
+
 ### Fixed
 - **⏱️ Rate Limit Compliance**: Increased update interval from 60 to 75 seconds
   - Entur API enforces 5 requests per 5-minute **rolling window** (not fixed window)

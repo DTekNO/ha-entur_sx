@@ -40,10 +40,14 @@ class HTMLSanitizer(HTMLParser):
         super().__init__()
         self.result = []
         self.open_tags = []
-        # Tags that should be closed
-        self.closing_tags = {'ul', 'ol', 'li', 'div', 'p', 'span', 'table', 'tr', 'td', 'th'}
+        # Block-level tags that should be closed
+        self.block_tags = {'ul', 'ol', 'li', 'div', 'p', 'table', 'tr', 'td', 'th', 'tbody', 'thead'}
+        # Inline tags that should be auto-closed when parent block closes
+        self.inline_tags = {'b', 'strong', 'i', 'em', 'u', 'a', 'span', 'code', 'small'}
         # Self-closing tags
         self.self_closing = {'br', 'img', 'hr', 'input', 'meta', 'link'}
+        # All tags we track
+        self.closing_tags = self.block_tags | self.inline_tags
     
     def handle_starttag(self, tag, attrs):
         """Handle opening tag."""
@@ -54,14 +58,31 @@ class HTMLSanitizer(HTMLParser):
     
     def handle_endtag(self, tag):
         """Handle closing tag."""
-        if tag in self.open_tags:
-            # Close this tag and any unclosed tags inside it
-            while self.open_tags and self.open_tags[-1] != tag:
-                unclosed = self.open_tags.pop()
-                self.result.append(f'</{unclosed}>')
-            if self.open_tags:
-                self.open_tags.pop()
-                self.result.append(f'</{tag}>')
+        if tag in self.closing_tags:
+            # If this is a block tag closing, first close any open inline tags
+            if tag in self.block_tags:
+                # Close inline tags that are inside this block
+                inline_to_close = []
+                for open_tag in reversed(self.open_tags):
+                    if open_tag == tag:
+                        break
+                    if open_tag in self.inline_tags:
+                        inline_to_close.append(open_tag)
+                
+                # Close the inline tags
+                for inline_tag in inline_to_close:
+                    self.result.append(f'</{inline_tag}>')
+                    self.open_tags.remove(inline_tag)
+            
+            # Now close the actual tag
+            if tag in self.open_tags:
+                # Close this tag and any improperly nested tags
+                while self.open_tags and self.open_tags[-1] != tag:
+                    unclosed = self.open_tags.pop()
+                    self.result.append(f'</{unclosed}>')
+                if self.open_tags and self.open_tags[-1] == tag:
+                    self.open_tags.pop()
+                    self.result.append(f'</{tag}>')
     
     def handle_data(self, data):
         """Handle text data."""
