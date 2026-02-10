@@ -308,6 +308,7 @@ class EnturSXSensor(
     """Sensor for a single Entur transit line deviation status."""
 
     _attr_has_entity_name = True
+    _unrecorded_attributes = frozenset({"formatted_content", "entity_picture"})
 
     def __init__(
         self,
@@ -568,6 +569,7 @@ class EnturSXSummarySensor(
     """Summary sensor with markdown-ready content for all monitored lines."""
 
     _attr_has_entity_name = True
+    _unrecorded_attributes = frozenset({"markdown_active", "markdown_planned"})
 
     def __init__(
         self,

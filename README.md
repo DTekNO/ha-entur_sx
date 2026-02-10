@@ -314,6 +314,33 @@ Even with 60-second intervals, throttling can happen due to:
 
 The smart back-off ensures the integration handles these situations gracefully without manual intervention.
 
+## Database & Performance
+
+### Automatic Recorder Optimization
+
+The integration automatically excludes large attributes from recorder history to prevent database bloat:
+
+**Line Sensors - Excluded attributes:**
+- `formatted_content` - Markdown formatted disruption details
+- `entity_picture` - Base64-encoded badge SVG
+
+**Summary Sensor - Excluded attributes:**
+- `markdown_active` - Formatted active disruptions
+- `markdown_planned` - Formatted planned disruptions
+
+**Still recorded:**
+- `state` - Current disruption status or count
+- Essential attributes (valid_from, valid_to, status, etc.)
+
+**Benefits:**
+- ✅ Prevents database bloat from large markdown content
+- ✅ Keeps useful data for history and graphs
+- ✅ All excluded attributes remain available in real-time
+- ✅ No manual recorder configuration needed
+- ✅ Automations and dashboards work perfectly
+
+> **Note**: This follows Home Assistant best practices for attributes not suitable for state history. All data is always available in real-time via `state_attr()`, dashboard cards, and automations.
+
 ## Example Dashboard Configuration
 
 ### Basic Status Card with Badges
