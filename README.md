@@ -179,7 +179,7 @@ content: |
 ## Features
 
 - 🚌 **Monitor multiple transit lines** - Track unlimited lines across Norway
-- 🔄 **Automatic updates** - Refreshes every 60 seconds
+- 🔄 **Automatic updates** - Refreshes every 75 seconds (respecting Entur's rate limits)
 - 🌐 **All Norwegian operators** - Support for every public transport operator in Norway
 - 🎨 **Entur TravelTag badges** - Beautiful badges with transport mode icons and official Entur colors
   - Entity pictures on line sensors
@@ -261,17 +261,31 @@ Note: The filters option requires Home Assistant 2023.4 or later. For older vers
 
 The integration implements smart throttle handling to protect against API rate limits and keep your sensors available during temporary issues.
 
+### Entur API Rate Limits
+
+The Entur SIRI-SX API enforces rate limits using a **rolling time window**:
+- **5 requests per 5-minute rolling window**
+- Response headers indicate remaining quota: `rate-limit-available`, `rate-limit-allowed`, `rate-limit-expiry-time`
+- The API also enforces spike arrest: minimum 100ms between requests
+
+**What is a rolling window?**  
+Unlike fixed windows that reset at specific times, a rolling window continuously tracks requests. For example:
+- If you make 5 requests between 10:00-10:04, you've used your quota
+- You must wait until the oldest request "expires" from the window before making a new one
+- This means spacing requests evenly is critical
+
 ### How It Works
 
 **Normal Operation:**
-- Polls Entur API every 60 seconds (well within the 4 requests/minute limit)
+- Polls Entur API every **75 seconds** (safely under the 5 requests per 5 minutes limit)
 - Each successful update refreshes all monitored lines
+- Response headers are monitored to track remaining quota
 
 **If Rate Limited (429 Error):**
 1. **Smart Back-off**: Automatically increases polling interval
    - First throttle: waits 2 minutes before retry
    - Repeated throttles: exponentially increases to max 10 minutes
-   - Resets to normal (60s) after 30 minutes of successful polling
+   - Resets to normal (75s) after 30 minutes of successful polling
    
 2. **State Preservation**: Sensors **stay available** showing last known data
    - No "unavailable" state during cooldown period

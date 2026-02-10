@@ -13,7 +13,7 @@ DEFAULT_DEVICE_NAME = "Entur Disruption"  # Fallback only, translations preferre
 DEFAULT_CREATE_SUMMARY_SENSORS = True
 DEFAULT_SUMMARY_ICON = "mdi:bus-alert"
 DEFAULT_LANG = "en"  # Default to English if HA language cannot be determined
-UPDATE_INTERVAL = 60  # seconds
+UPDATE_INTERVAL = 75  # seconds - Entur API allows 5 requests per 5-minute rolling window (300s / 5 = 60s minimum, adding 15s safety margin)
 
 
 def normalize_language(language_code: str | None) -> str:

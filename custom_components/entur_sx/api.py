@@ -21,7 +21,7 @@ class RateLimitTracker:
     
     def __init__(self):
         """Initialize rate limit tracker."""
-        self.allowed: int = 5  # Default: 5 requests per minute
+        self.allowed: int = 5  # Default: 5 requests per 5-minute rolling window
         self.available: int = 5
         self.used: int = 0
         self.expiry_time: str | None = None
@@ -178,7 +178,7 @@ class EnturSXApiClient:
         
         Handles pagination when MoreData=true using requestorId to retrieve
         all situations in extreme weather scenarios (flooding, heavy snow).
-        Respects rate limits from API headers (5 req/min, 200ms between requests).
+        Respects rate limits from API headers (5 req per 5-min rolling window, 200ms between requests).
         
         Returns:
             Dict mapping line reference to list of deviations with status, e.g.

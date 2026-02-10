@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **⏱️ Rate Limit Compliance**: Increased update interval from 60 to 75 seconds
+  - Entur API enforces 5 requests per 5-minute **rolling window** (not fixed window)
+  - Previous 60-second interval caused periodic 429 errors after ~5-6 minutes of operation
+  - New 75-second interval (300s / 5 = 60s + 15s safety margin) ensures compliance
+  - Updated documentation to accurately describe rolling window behavior
+  - Fixed incorrect "5 requests per minute" comment in code (actual limit: 5 per 5 minutes)
+
 ## [2026.02.1]
 
 ### Added
