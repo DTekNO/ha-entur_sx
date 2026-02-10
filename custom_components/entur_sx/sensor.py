@@ -646,8 +646,8 @@ class EnturSXSummarySensor(
         active_lines = set()
         planned_lines = set()
         normal = []
-        active_formatted = []
-        planned_formatted = []
+        active_disruptions_list = []
+        planned_disruptions_list = []
 
         for line_ref in self.lines:
             line_data = self.coordinator.data.get(line_ref, [])
@@ -672,7 +672,7 @@ class EnturSXSummarySensor(
                 if status == STATUS_EXPIRED:
                     continue
 
-                # Build formatted content with badge
+                # Extract deviation details
                 summary = deviation.get("summary", "Unknown disruption")
                 description = deviation.get("description", "")
                 valid_from = deviation.get("valid_from", "")
@@ -702,76 +702,88 @@ class EnturSXSummarySensor(
                     except (ValueError, AttributeError):
                         pass
                 
-                formatted_markdown = f'<img src="{badge_svg}" alt="{transport_mode} {line_name}" height="28">\n\n'
-                formatted_markdown += f"**{summary}**\n\n"
-                if description:
-                    formatted_markdown += f"{description}\n\n"
-                
-                # Language-specific labels
-                if self._lang == "no":
-                    formatted_markdown += f"*📅 Fra: {valid_from_formatted}"
-                    if valid_to:
-                        formatted_markdown += f" • Til: {valid_to_formatted}*\n\n"
-                    else:
-                        formatted_markdown += " • Inntil videre*\n\n"
-                else:
-                    formatted_markdown += f"*📅 From: {valid_from_formatted}"
-                    if valid_to:
-                        formatted_markdown += f" • To: {valid_to_formatted}*\n\n"
-                    else:
-                        formatted_markdown += " • Until further notice*\n\n"
-                formatted_markdown += "---\n\n"
+                # Build enriched disruption dict for template
+                disruption_dict = {
+                    'transport_mode': transport_mode,
+                    'line_name': line_name,
+                    'badge_svg': badge_svg,
+                    'summary': summary,
+                    'description': description,
+                    'valid_from_formatted': valid_from_formatted,
+                    'valid_to_formatted': valid_to_formatted,
+                    'status': status
+                }
 
                 # Categorize by status
                 if status == STATUS_OPEN:
                     has_active = True
                     active_lines.add(line_ref)
-                    active_formatted.append(formatted_markdown)
+                    active_disruptions_list.append(disruption_dict)
                 elif status == STATUS_PLANNED:
                     has_planned = True
                     planned_lines.add(line_ref)
-                    planned_formatted.append(formatted_markdown)
+                    planned_disruptions_list.append(disruption_dict)
                 else:
                     # Unknown status - include in active for safety
                     has_active = True
                     active_lines.add(line_ref)
-                    active_formatted.append(formatted_markdown)
+                    active_disruptions_list.append(disruption_dict)
 
             # If line has no non-expired deviations, mark as normal
             if not has_active and not has_planned:
                 normal.append(line_ref)
 
-        # Build markdown for active disruptions
-        if not active_formatted:
+        # Render markdown using template
+        if not active_disruptions_list:
             markdown_active = STATE_NORMAL
         else:
-            markdown_active = ''.join(active_formatted)
-            if normal or planned_lines:
-                normal_count = len(normal) + len(planned_lines)
-                if self._lang == "no":
-                    markdown_active += (
-                        f"\n*{normal_count} linje(r) med normal drift*\n"
+            if self._formatted_content_template:
+                try:
+                    markdown_active = self._formatted_content_template.render(
+                        disruptions=active_disruptions_list
                     )
-                else:
-                    markdown_active += (
-                        f"\n*{normal_count} line(s) with normal service*\n"
-                    )
+                    # Add normal service footer
+                    if normal or planned_lines:
+                        normal_count = len(normal) + len(planned_lines)
+                        if self._lang == "no":
+                            markdown_active += (
+                                f"\n*{normal_count} linje(r) med normal drift*\n"
+                            )
+                        else:
+                            markdown_active += (
+                                f"\n*{normal_count} line(s) with normal service*\n"
+                            )
+                except Exception as err:
+                    _LOGGER.error("Failed to render active disruptions template: %s", err)
+                    markdown_active = "Error rendering template"
+            else:
+                markdown_active = "Template not available"
 
-        # Build markdown for planned disruptions
-        if not planned_formatted:
+        # Render planned disruptions using template
+        if not planned_disruptions_list:
             markdown_planned = "Ingen planlagte avvik" if self._lang == "no" else "No planned disruptions"
         else:
-            markdown_planned = ''.join(planned_formatted)
-            if normal or active_lines:
-                normal_count = len(normal) + len(active_lines)
-                if self._lang == "no":
-                    markdown_planned += (
-                        f"\n*{normal_count} linje(r) med normal drift*\n"
+            if self._formatted_content_template:
+                try:
+                    markdown_planned = self._formatted_content_template.render(
+                        disruptions=planned_disruptions_list
                     )
-                else:
-                    markdown_planned += (
-                        f"\n*{normal_count} line(s) with normal service*\n"
-                    )
+                    # Add normal service footer
+                    if normal or active_lines:
+                        normal_count = len(normal) + len(active_lines)
+                        if self._lang == "no":
+                            markdown_planned += (
+                                f"\n*{normal_count} linje(r) med normal drift*\n"
+                            )
+                        else:
+                            markdown_planned += (
+                                f"\n*{normal_count} line(s) with normal service*\n"
+                            )
+                except Exception as err:
+                    _LOGGER.error("Failed to render planned disruptions template: %s", err)
+                    markdown_planned = "Error rendering template"
+            else:
+                markdown_planned = "Template not available"
 
         return {
             "total_lines": len(self.lines),

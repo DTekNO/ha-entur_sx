@@ -28,6 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     lang = normalize_language(hass.config.language)
     
     api = EnturSXApiClient(
+        hass=hass,
         operator=config_data.get("operator"),
         lines=config_data.get("lines_to_check", []),
         lang=lang,

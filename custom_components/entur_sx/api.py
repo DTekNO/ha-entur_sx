@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from email.utils import parsedate_to_datetime
 
 import aiohttp
@@ -15,19 +15,24 @@ import async_timeout
 
 from .const import API_BASE_URL, API_GRAPHQL_URL, CODESPACE_NAMES, STATE_NORMAL, STATUS_EXPIRED, STATUS_PLANNED, STATUS_OPEN
 
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
 _LOGGER = logging.getLogger(__name__)
 
+# Global quota manager key for hass.data
+QUOTA_MANAGER_KEY = "entur_sx_quota_manager"
 
-class RateLimitTracker:
-    """Track API rate limits with rolling window quota management.
+
+class GlobalQuotaManager:
+    """Centralized quota manager shared across all API clients.
     
-    Enforces 4 requests per 60-second rolling window. Allows rapid bursts during
-    pagination as long as total requests stay within quota. Also respects API
-    rate-limit headers.
+    Singleton that enforces 4 requests per 60-second rolling window globally
+    across all config entries, coordinators, and config flow requests.
     """
     
     def __init__(self):
-        """Initialize rate limit tracker."""
+        """Initialize global quota manager."""
         # API header tracking (for respecting server-side limits)
         self.allowed: int | None = None
         self.available: int | None = None
@@ -40,6 +45,11 @@ class RateLimitTracker:
         self.window_seconds: float = 60.0  # Rolling window duration
         self.max_requests_per_window: int = 4  # Maximum requests in window
         
+        # Lock to prevent race conditions across async requests
+        self._lock = asyncio.Lock()
+        
+        _LOGGER.info("Global Entur API quota manager initialized (4 req/60s limit)")
+    
     def update_from_headers(self, headers: dict) -> None:
         """Update rate limit info from response headers.
         
@@ -132,16 +142,29 @@ class RateLimitTracker:
         
         if wait_time > 0:
             _LOGGER.info(
-                "Rate limit: %d/%d internal quota used. Waiting %.1f seconds for quota restoration.",
+                "[GLOBAL QUOTA] %d/4 internal quota used. Waiting %.1f seconds for quota restoration.",
                 len(self.request_timestamps),
-                self.max_requests_per_window,
                 wait_time
             )
             await asyncio.sleep(wait_time)
     
-    def record_request(self) -> None:
-        """Record that a request was made (for rolling window tracking)."""
+    def record_request(self, operator: str | None = None) -> None:
+        """Record that a request was made (for rolling window tracking).
+        
+        Args:
+            operator: Optional operator/provider for logging
+        """
         self.request_timestamps.append(time.time())
+        used = len(self.request_timestamps)
+        available = self.max_requests_per_window - used
+        
+        # Use INFO level so users can see quota manager working
+        _LOGGER.info(
+            "[GLOBAL QUOTA] Request completed for %s. Quota: %d/4 used, %d remaining",
+            operator or "unknown",
+            used,
+            available
+        )
     
     def get_time_since_last_request(self) -> float:
         """Get seconds since last request.
@@ -154,11 +177,26 @@ class RateLimitTracker:
         return time.time() - self.request_timestamps[-1]
 
 
+def get_quota_manager(hass: HomeAssistant) -> GlobalQuotaManager:
+    """Get or create the global quota manager singleton.
+    
+    Args:
+        hass: Home Assistant instance
+        
+    Returns:
+        The global quota manager instance
+    """
+    if QUOTA_MANAGER_KEY not in hass.data:
+        hass.data[QUOTA_MANAGER_KEY] = GlobalQuotaManager()
+    return hass.data[QUOTA_MANAGER_KEY]
+
+
 class EnturSXApiClient:
     """API client for Entur Situation Exchange."""
 
     def __init__(
         self,
+        hass: HomeAssistant,
         operator: str | None = None,
         lines: list[str] | None = None,
         lang: str = "no",
@@ -166,15 +204,19 @@ class EnturSXApiClient:
         """Initialize the API client.
         
         Args:
+            hass: Home Assistant instance
             operator: Codespace (e.g., "SKY", "SOF")
             lines: List of line IDs to monitor
             lang: Preferred language code ("no" or "en")
         """
+        self._hass = hass
         self._operator = operator
         self._lines = lines or []
         self._lang = lang
         self._session: aiohttp.ClientSession | None = None
-        self._rate_limiter = RateLimitTracker()
+        
+        # Get the global quota manager singleton
+        self._quota_manager = get_quota_manager(hass)
 
         # The operator is now the codespace directly (e.g., "SKY", "SOF")
         # This is what we use for the SIRI-SX datasetId parameter
@@ -274,46 +316,59 @@ class EnturSXApiClient:
             # Timeout must accommodate quota waits: 20 pages with potential 60s waits
             async with async_timeout.timeout(350):
                 while page_count < max_pages:
-                    # Check if we have quota available (both internal and API header)
-                    can_proceed, reason = self._rate_limiter.can_make_request()
+                    # CRITICAL: Check quota through GLOBAL manager before every request
+                    # This ensures all API clients, coordinators, and config flows respect the same quota
+                    async with self._quota_manager._lock:
+                        internal_used = len(self._quota_manager.request_timestamps)
+                        can_proceed, reason = self._quota_manager.can_make_request()
+                        
+                        # Log quota state for debugging (only if we've made requests before)
+                        if internal_used > 0:
+                            _LOGGER.debug(
+                                "[%s] Quota check before page %d: %d/4 requests in last 60s, can_proceed=%s",
+                                self._operator_code or "ALL",
+                                page_count + 1,
+                                internal_used,
+                                can_proceed
+                            )
+                        
+                        if not can_proceed:
+                            # Release lock before waiting
+                            _LOGGER.info(
+                                "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s.",
+                                self._operator_code or "ALL",
+                                page_count + 1,
+                                reason,
+                                internal_used
+                            )
                     
+                    # If we can't proceed, wait outside the lock
                     if not can_proceed:
+                        await self._quota_manager.wait_for_quota()
                         _LOGGER.info(
-                            "Rate limit before page %d: %s. Waiting for quota restoration...",
-                            page_count + 1,
-                            reason
+                            "[%s] Quota restored, resuming for page %d",
+                            self._operator_code or "ALL",
+                            page_count + 1
                         )
-                        # Wait until quota available, then continue pagination
-                        await self._rate_limiter.wait_for_quota()
-                        _LOGGER.info("Quota restored, resuming pagination for page %d", page_count + 1)
                     
                     page_count += 1
                     
-                    # Record this request in our rolling window tracker
-                    self._rate_limiter.record_request()
+                    # Record this request in the GLOBAL quota manager
+                    self._quota_manager.record_request(self._operator_code)
                     
                     # Add requestorId parameter for pagination
                     url = f"{self._service_url}&requestorId={requestor_id}" if "?" in self._service_url else f"{self._service_url}?requestorId={requestor_id}"
-                    
-                    # Log quota status before request
-                    internal_quota = self._rate_limiter.get_internal_quota_available()
-                    api_quota_str = f", API: {self._rate_limiter.available}/{self._rate_limiter.allowed}" if self._rate_limiter.available is not None else ""
-                    _LOGGER.debug(
-                        "Fetching page %d (internal quota: %d/4 remaining%s)",
-                        page_count,
-                        internal_quota,
-                        api_quota_str
-                    )
                     
                     async with self._session.get(url, headers=headers) as response:
                         # Check for 429 rate limit errors
                         if response.status == 429:
                             _LOGGER.error(
-                                "⚠️  RATE LIMIT ERROR (429) - API rejected request. "
+                                "⚠️  RATE LIMIT ERROR (429) - API rejected request for %s. "
                                 "Page %d of pagination. Time since last request: %.1fs. "
-                                "This indicates our rate limiting is too aggressive. Please report this.",
+                                "Global quota manager should have prevented this - please report!",
+                                self._operator_code or "ALL",
                                 page_count,
-                                self._rate_limiter.get_time_since_last_request()
+                                self._quota_manager.get_time_since_last_request()
                             )
                             # Log headers for debugging
                             if "retry-after" in response.headers:
@@ -322,8 +377,8 @@ class EnturSXApiClient:
                         
                         response.raise_for_status()
                         
-                        # Update rate limit tracking from response headers
-                        self._rate_limiter.update_from_headers(response.headers)
+                        # Update quota manager from response headers
+                        self._quota_manager.update_from_headers(response.headers)
                         
                         # API returns JSON but with incorrect content-type header sometimes
                         # Use text() and json.loads() to handle this
@@ -346,11 +401,12 @@ class EnturSXApiClient:
                             all_situations.extend(situations)
                             
                             rate_info = ""
-                            if self._rate_limiter.available is not None:
-                                rate_info = f" API headers: {self._rate_limiter.available}/{self._rate_limiter.allowed} remaining"
+                            if self._quota_manager.available is not None:
+                                rate_info = f" API headers: {self._quota_manager.available}/{self._quota_manager.allowed} remaining"
                             
                             _LOGGER.debug(
-                                "Retrieved page %d: %d situations (total so far: %d).%s",
+                                "[%s] Retrieved page %d: %d situations (total so far: %d).%s",
+                                self._operator_code or "ALL",
                                 page_count,
                                 len(situations),
                                 len(all_situations),
@@ -361,18 +417,18 @@ class EnturSXApiClient:
                         more_data = service_delivery.get("MoreData", False)
                         
                         if more_data:
-                            internal_remaining = self._rate_limiter.get_internal_quota_available()
-                            api_quota_str = f", API: {self._rate_limiter.available}/{self._rate_limiter.allowed}" if self._rate_limiter.available is not None else ""
+                            internal_remaining = self._quota_manager.get_internal_quota_available()
+                            api_quota_str = f", API: {self._quota_manager.available}/{self._quota_manager.allowed}" if self._quota_manager.available is not None else ""
                             
                             _LOGGER.info(
-                                "MoreData=true, continuing pagination. Page %d retrieved %d situations (total: %d). "
-                                "Quota: %d/4 internal%s. Operator: %s",
+                                "[%s] MoreData=true, continuing pagination. Page %d: %d situations (total: %d). "
+                                "Quota: %d/4 internal%s",
+                                self._operator_code or "ALL",
                                 page_count,
                                 len(situations),
                                 len(all_situations),
                                 internal_remaining,
-                                api_quota_str,
-                                self._operator_code or "all"
+                                api_quota_str
                             )
                             # Continue loop to fetch next page with same requestorId
                         else:
