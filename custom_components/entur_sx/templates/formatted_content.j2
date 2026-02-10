@@ -1,9 +1,18 @@
 {%- if disruptions and disruptions | length > 0 -%}
 {#- Group disruptions by line and display with badge shown once per line -#}
-{%- for line_name, line_disruptions in disruptions | groupby('line_name') %}
+{%- for group in disruptions | groupby('line_name') %}
+{%- set line_name = group.grouper -%}
+{%- set line_disruptions = group.list -%}
 {%- set first_disruption = line_disruptions[0] -%}
 {%- set transport_mode = first_disruption.get('transport_mode', 'bus') -%}
 {%- set badge_svg = first_disruption.get('badge_svg', '') -%}
+
+{#- Show separator before each entry except the first -#}
+{%- if not loop.first %}
+
+---
+
+{%- endif %}
 
 {#- Show badge once for this line -#}
 {%- if badge_svg %}
@@ -38,8 +47,6 @@
 {%- endif %}
 
 {%- endfor %}
-
----
 
 {%- endfor -%}
 {%- else -%}

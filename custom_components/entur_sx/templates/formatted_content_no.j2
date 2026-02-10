@@ -1,9 +1,18 @@
 {%- if disruptions and disruptions | length > 0 -%}
 {#- Grupper avvik etter linje og vis badge én gang per linje -#}
-{%- for line_name, line_disruptions in disruptions | groupby('line_name') %}
+{%- for group in disruptions | groupby('line_name') %}
+{%- set line_name = group.grouper -%}
+{%- set line_disruptions = group.list -%}
 {%- set first_disruption = line_disruptions[0] -%}
 {%- set transport_mode = first_disruption.get('transport_mode', 'bus') -%}
 {%- set badge_svg = first_disruption.get('badge_svg', '') -%}
+
+{#- Vis skillelinje før hver oppføring unntatt den første -#}
+{%- if not loop.first %}
+
+---
+
+{%- endif %}
 
 {#- Vis badge én gang for denne linjen -#}
 {%- if badge_svg %}
@@ -38,8 +47,6 @@
 {%- endif %}
 
 {%- endfor %}
-
----
 
 {%- endfor -%}
 {%- else -%}

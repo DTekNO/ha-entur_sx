@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html.parser import HTMLParser
 import logging
 import os
 from typing import Any
@@ -30,6 +31,66 @@ from .coordinator import EnturSXDataUpdateCoordinator
 from .icon_constants import TRANSPORT_COLORS, TRANSPORT_ICONS
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class HTMLSanitizer(HTMLParser):
+    """Simple HTML parser to fix unclosed tags."""
+    
+    def __init__(self):
+        super().__init__()
+        self.result = []
+        self.open_tags = []
+        # Tags that should be closed
+        self.closing_tags = {'ul', 'ol', 'li', 'div', 'p', 'span', 'table', 'tr', 'td', 'th'}
+        # Self-closing tags
+        self.self_closing = {'br', 'img', 'hr', 'input', 'meta', 'link'}
+    
+    def handle_starttag(self, tag, attrs):
+        """Handle opening tag."""
+        attr_str = ''.join(f' {name}="{value}"' for name, value in attrs)
+        self.result.append(f'<{tag}{attr_str}>')
+        if tag in self.closing_tags:
+            self.open_tags.append(tag)
+    
+    def handle_endtag(self, tag):
+        """Handle closing tag."""
+        if tag in self.open_tags:
+            # Close this tag and any unclosed tags inside it
+            while self.open_tags and self.open_tags[-1] != tag:
+                unclosed = self.open_tags.pop()
+                self.result.append(f'</{unclosed}>')
+            if self.open_tags:
+                self.open_tags.pop()
+                self.result.append(f'</{tag}>')
+    
+    def handle_data(self, data):
+        """Handle text data."""
+        self.result.append(data)
+    
+    def close_all(self):
+        """Close any remaining open tags."""
+        while self.open_tags:
+            tag = self.open_tags.pop()
+            self.result.append(f'</{tag}>')
+    
+    def get_result(self):
+        """Get sanitized HTML."""
+        self.close_all()
+        return ''.join(self.result)
+
+
+def _sanitize_html(html: str) -> str:
+    """Sanitize HTML by closing any unclosed tags."""
+    if not html or '<' not in html:
+        return html
+    
+    try:
+        parser = HTMLSanitizer()
+        parser.feed(html)
+        return parser.get_result()
+    except Exception as err:
+        _LOGGER.debug("Failed to sanitize HTML, returning original: %s", err)
+        return html
 
 
 async def _async_load_template(hass: HomeAssistant, lang: str = "no") -> str | None:
@@ -294,7 +355,7 @@ async def async_setup_entry(
 
     # Create summary sensor if configured
     if config_data.get("create_summary_sensors", False):
-        entities.append(EnturSXSummarySensor(coordinator, entry, lines, lang))
+        entities.append(EnturSXSummarySensor(coordinator, entry, lines, template_content, lang))
 
     _LOGGER.info("Setting up %d Entur SX sensors", len(entities))
     # Update entities immediately with coordinator's existing data
@@ -402,6 +463,10 @@ class EnturSXSensor(
             enriched["transport_mode"] = transport_mode
             enriched["line_name"] = line_name
             enriched["badge_svg"] = badge_svg
+            
+            # Sanitize description HTML to fix unclosed tags from API
+            if "description" in enriched and enriched["description"]:
+                enriched["description"] = _sanitize_html(enriched["description"])
             
             # Format dates
             valid_from = disruption.get("valid_from", "")
@@ -576,12 +641,19 @@ class EnturSXSummarySensor(
         coordinator: EnturSXDataUpdateCoordinator,
         entry: ConfigEntry,
         lines: list[str],
+        template_content: str | None,
         lang: str = "no",
     ) -> None:
         """Initialize the summary sensor."""
         super().__init__(coordinator)
         self.lines = lines
         self._lang = lang
+        
+        # Store pre-loaded template content
+        self._template_content = template_content
+        self._formatted_content_template = None
+        if template_content:
+            self._compile_template(template_content)
 
         device_name = entry.data.get(CONF_DEVICE_NAME, "Entur Disruption")
         config_data = {**entry.data, **entry.options}
@@ -604,6 +676,21 @@ class EnturSXSummarySensor(
             entry_type=DeviceEntryType.SERVICE,
             configuration_url="https://entur.no",
         )
+
+    def _compile_template(self, template_string: str) -> None:
+        """Compile Jinja2 template from string."""
+        try:
+            from jinja2 import Template
+
+            self._formatted_content_template = Template(template_string)
+            _LOGGER.debug("Successfully compiled formatted_content template for summary sensor")
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to compile formatted_content template: %s. Formatted content will not be available.",
+                err,
+                exc_info=True,
+            )
+            self._formatted_content_template = None
 
     @property
     def native_value(self) -> int:
@@ -677,6 +764,10 @@ class EnturSXSummarySensor(
                 description = deviation.get("description", "")
                 valid_from = deviation.get("valid_from", "")
                 valid_to = deviation.get("valid_to", "")
+                
+                # Sanitize description HTML to fix unclosed tags from API
+                if description:
+                    description = _sanitize_html(description)
                 
                 # Format dates for display
                 valid_from_formatted = valid_from
