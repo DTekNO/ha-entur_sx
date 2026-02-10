@@ -5,8 +5,10 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any
+from email.utils import parsedate_to_datetime
 
 import aiohttp
 import async_timeout
@@ -17,16 +19,26 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class RateLimitTracker:
-    """Track API rate limits from response headers."""
+    """Track API rate limits with rolling window quota management.
+    
+    Enforces 4 requests per 60-second rolling window. Allows rapid bursts during
+    pagination as long as total requests stay within quota. Also respects API
+    rate-limit headers.
+    """
     
     def __init__(self):
         """Initialize rate limit tracker."""
-        self.allowed: int = 5  # Default: 5 requests per 5-minute rolling window
-        self.available: int = 5
-        self.used: int = 0
+        # API header tracking (for respecting server-side limits)
+        self.allowed: int | None = None
+        self.available: int | None = None
+        self.used: int | None = None
         self.expiry_time: str | None = None
-        self.last_request_time: float = 0.0
-        self.min_interval_ms: int = 100  # Spike arrest: 1 req per 100ms
+        self.expiry_datetime: datetime | None = None
+        
+        # Rolling window tracking (our internal quota: 4 requests per 60 seconds)
+        self.request_timestamps: deque = deque(maxlen=4)  # Last 4 request times
+        self.window_seconds: float = 60.0  # Rolling window duration
+        self.max_requests_per_window: int = 4  # Maximum requests in window
         
     def update_from_headers(self, headers: dict) -> None:
         """Update rate limit info from response headers.
@@ -42,45 +54,104 @@ class RateLimitTracker:
             self.used = int(headers["rate-limit-used"])
         if "rate-limit-expiry-time" in headers:
             self.expiry_time = headers["rate-limit-expiry-time"]
-            
-        # Log when getting close to limit
-        if self.available <= 1:
-            _LOGGER.warning(
-                "Rate limit nearly exhausted: %d/%d requests remaining until %s",
-                self.available,
-                self.allowed,
-                self.expiry_time
-            )
-        elif self.available <= 2:
-            _LOGGER.info(
-                "Rate limit info: %d/%d requests remaining until %s",
-                self.available,
-                self.allowed,
-                self.expiry_time
-            )
-    
-    async def wait_if_needed(self, delay_ms: int = 200) -> None:
-        """Wait if necessary to respect spike arrest limits.
+            # Parse the expiry time to datetime for calculations
+            try:
+                self.expiry_datetime = parsedate_to_datetime(self.expiry_time)
+            except Exception as err:
+                _LOGGER.debug("Could not parse expiry time '%s': %s", self.expiry_time, err)
+                self.expiry_datetime = None
         
-        Args:
-            delay_ms: Minimum milliseconds between requests (default 200ms for safety margin)
-        """
-        if self.last_request_time > 0:
-            elapsed_ms = (time.time() - self.last_request_time) * 1000
-            if elapsed_ms < delay_ms:
-                wait_ms = delay_ms - elapsed_ms
-                _LOGGER.debug("Rate limit: waiting %.0fms before next request", wait_ms)
-                await asyncio.sleep(wait_ms / 1000)
-        
-        self.last_request_time = time.time()
+        # Log rate limit info for monitoring
+        if self.available is not None and self.allowed is not None:
+            if self.available <= 1:
+                _LOGGER.warning(
+                    "API rate limit headers show low quota: %d/%d requests remaining until %s",
+                    self.available,
+                    self.allowed,
+                    self.expiry_time or "unknown"
+                )
+            elif self.available <= 2:
+                _LOGGER.info(
+                    "API rate limit headers: %d/%d requests remaining until %s",
+                    self.available,
+                    self.allowed,
+                    self.expiry_time or "unknown"
+                )
     
-    def can_make_request(self) -> bool:
-        """Check if we have quota available.
+    def get_internal_quota_available(self) -> int:
+        """Get number of requests available in our internal rolling window.
         
         Returns:
-            True if we can safely make a request
+            Number of requests we can make without exceeding 4 per 60 seconds
         """
-        return self.available > 0
+        now = time.time()
+        # Remove timestamps older than 60 seconds
+        while self.request_timestamps and (now - self.request_timestamps[0]) > self.window_seconds:
+            self.request_timestamps.popleft()
+        
+        return self.max_requests_per_window - len(self.request_timestamps)
+    
+    def get_seconds_until_quota_available(self) -> float:
+        """Calculate seconds until at least 1 request quota is available.
+        
+        Returns:
+            Seconds to wait, or 0 if quota currently available
+        """
+        if self.get_internal_quota_available() > 0:
+            return 0.0
+        
+        # We're at limit. Calculate when oldest request will expire from window
+        now = time.time()
+        oldest_request = self.request_timestamps[0]
+        time_until_expiry = self.window_seconds - (now - oldest_request)
+        
+        # Add 0.5 second safety margin
+        return max(0, time_until_expiry + 0.5)
+    
+    def can_make_request(self) -> tuple[bool, str]:
+        """Check if we can make a request based on both internal and API quotas.
+        
+        Returns:
+            Tuple of (can_proceed, reason_if_not)
+        """
+        # Check internal rolling window quota
+        internal_available = self.get_internal_quota_available()
+        if internal_available <= 0:
+            wait_time = self.get_seconds_until_quota_available()
+            return False, f"internal quota exhausted (4 req/60s limit), wait {wait_time:.1f}s"
+        
+        # Check API header quota (if available)
+        if self.available is not None and self.available <= 0:
+            return False, f"API header shows no quota ({self.available}/{self.allowed})"
+        
+        return True, ""
+    
+    async def wait_for_quota(self) -> None:
+        """Wait until request quota is available."""
+        wait_time = self.get_seconds_until_quota_available()
+        
+        if wait_time > 0:
+            _LOGGER.info(
+                "Rate limit: %d/%d internal quota used. Waiting %.1f seconds for quota restoration.",
+                len(self.request_timestamps),
+                self.max_requests_per_window,
+                wait_time
+            )
+            await asyncio.sleep(wait_time)
+    
+    def record_request(self) -> None:
+        """Record that a request was made (for rolling window tracking)."""
+        self.request_timestamps.append(time.time())
+    
+    def get_time_since_last_request(self) -> float:
+        """Get seconds since last request.
+        
+        Returns:
+            Seconds elapsed since last request, or infinity if no previous request
+        """
+        if not self.request_timestamps:
+            return float('inf')
+        return time.time() - self.request_timestamps[-1]
 
 
 class EnturSXApiClient:
@@ -178,7 +249,8 @@ class EnturSXApiClient:
         
         Handles pagination when MoreData=true using requestorId to retrieve
         all situations in extreme weather scenarios (flooding, heavy snow).
-        Respects rate limits from API headers (5 req per 5-min rolling window, 200ms between requests).
+        Uses smart quota management: allows rapid requests (burst) during pagination
+        as long as staying within 4 requests per 60-second rolling window.
         
         Returns:
             Dict mapping line reference to list of deviations with status, e.g.
@@ -199,30 +271,55 @@ class EnturSXApiClient:
         data = None  # Initialize to handle early breaks
 
         try:
-            async with async_timeout.timeout(30):
+            # Timeout must accommodate quota waits: 20 pages with potential 60s waits
+            async with async_timeout.timeout(350):
                 while page_count < max_pages:
-                    # Check rate limit quota before making request (but not for first page)
-                    # First page always attempts - we need fresh rate limit info from response
-                    if page_count > 0 and not self._rate_limiter.can_make_request():
-                        _LOGGER.warning(
-                            "Rate limit quota exhausted (%d/%d available). Stopping pagination at page %d.",
-                            self._rate_limiter.available,
-                            self._rate_limiter.allowed,
-                            page_count
-                        )
-                        break
+                    # Check if we have quota available (both internal and API header)
+                    can_proceed, reason = self._rate_limiter.can_make_request()
                     
-                    # Wait to respect spike arrest (200ms between requests)
-                    # Skip delay before first request in this polling cycle
-                    if page_count > 0:
-                        await self._rate_limiter.wait_if_needed(delay_ms=200)
+                    if not can_proceed:
+                        _LOGGER.info(
+                            "Rate limit before page %d: %s. Waiting for quota restoration...",
+                            page_count + 1,
+                            reason
+                        )
+                        # Wait until quota available, then continue pagination
+                        await self._rate_limiter.wait_for_quota()
+                        _LOGGER.info("Quota restored, resuming pagination for page %d", page_count + 1)
                     
                     page_count += 1
+                    
+                    # Record this request in our rolling window tracker
+                    self._rate_limiter.record_request()
                     
                     # Add requestorId parameter for pagination
                     url = f"{self._service_url}&requestorId={requestor_id}" if "?" in self._service_url else f"{self._service_url}?requestorId={requestor_id}"
                     
+                    # Log quota status before request
+                    internal_quota = self._rate_limiter.get_internal_quota_available()
+                    api_quota_str = f", API: {self._rate_limiter.available}/{self._rate_limiter.allowed}" if self._rate_limiter.available is not None else ""
+                    _LOGGER.debug(
+                        "Fetching page %d (internal quota: %d/4 remaining%s)",
+                        page_count,
+                        internal_quota,
+                        api_quota_str
+                    )
+                    
                     async with self._session.get(url, headers=headers) as response:
+                        # Check for 429 rate limit errors
+                        if response.status == 429:
+                            _LOGGER.error(
+                                "⚠️  RATE LIMIT ERROR (429) - API rejected request. "
+                                "Page %d of pagination. Time since last request: %.1fs. "
+                                "This indicates our rate limiting is too aggressive. Please report this.",
+                                page_count,
+                                self._rate_limiter.get_time_since_last_request()
+                            )
+                            # Log headers for debugging
+                            if "retry-after" in response.headers:
+                                _LOGGER.error("  Retry-After header: %s", response.headers["retry-after"])
+                            response.raise_for_status()
+                        
                         response.raise_for_status()
                         
                         # Update rate limit tracking from response headers
@@ -248,26 +345,34 @@ class EnturSXApiClient:
                             
                             all_situations.extend(situations)
                             
+                            rate_info = ""
+                            if self._rate_limiter.available is not None:
+                                rate_info = f" API headers: {self._rate_limiter.available}/{self._rate_limiter.allowed} remaining"
+                            
                             _LOGGER.debug(
-                                "Retrieved page %d: %d situations (total so far: %d). Rate limit: %d/%d remaining",
+                                "Retrieved page %d: %d situations (total so far: %d).%s",
                                 page_count,
                                 len(situations),
                                 len(all_situations),
-                                self._rate_limiter.available,
-                                self._rate_limiter.allowed
+                                rate_info
                             )
 
                         # Check for MoreData flag
                         more_data = service_delivery.get("MoreData", False)
                         
                         if more_data:
+                            internal_remaining = self._rate_limiter.get_internal_quota_available()
+                            api_quota_str = f", API: {self._rate_limiter.available}/{self._rate_limiter.allowed}" if self._rate_limiter.available is not None else ""
+                            
                             _LOGGER.info(
-                                "MoreData=true, fetching next page (page %d, %d situations retrieved so far). Operator: %s. Rate limit: %d/%d",
+                                "MoreData=true, continuing pagination. Page %d retrieved %d situations (total: %d). "
+                                "Quota: %d/4 internal%s. Operator: %s",
                                 page_count,
+                                len(situations),
                                 len(all_situations),
-                                self._operator_code or "all",
-                                self._rate_limiter.available,
-                                self._rate_limiter.allowed
+                                internal_remaining,
+                                api_quota_str,
+                                self._operator_code or "all"
                             )
                             # Continue loop to fetch next page with same requestorId
                         else:
