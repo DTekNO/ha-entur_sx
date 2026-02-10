@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2026.02.1]
 
 ### Fixed
 - **⏱️ Rate Limit Compliance**: Increased update interval from 60 to 75 seconds
@@ -14,8 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New 75-second interval (300s / 5 = 60s + 15s safety margin) ensures compliance
   - Updated documentation to accurately describe rolling window behavior
   - Fixed incorrect "5 requests per minute" comment in code (actual limit: 5 per 5 minutes)
-
-## [2026.02.1]
 
 ### Added
 - **🎨 Entur TravelTag Badges**: Professional transit line badges with official Entur Design System styling
