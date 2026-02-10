@@ -1,4 +1,4 @@
-﻿"""Transport mode icon constants for Entur SX integration."""
+"""Transport mode icon constants for Entur SX integration."""
 
 # Icon data URLs - white SVG icons for use on colored backgrounds
 # Source: Entur Design System (EUPL-1.2)

@@ -80,7 +80,7 @@ This is a Home Assistant custom integration that monitors real-time transit disr
 ## Common Tasks
 
 ### Adding Transport Modes
-1. Add icon SVG to `custom_components/entur_sx/icons/{Mode}_white.svg`
+1. Add icon SVG to `icons/{Mode}_white.svg` (repository root)
 2. Update `icon_constants.py` with color in `TRANSPORT_COLORS`
 3. Regenerate icon constants or add manually
 4. Update detection heuristics in `_detect_transport_mode()`

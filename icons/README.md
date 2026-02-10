@@ -34,7 +34,7 @@ Official transport icons from the [Entur Design System](https://github.com/entur
 
 To download more icons from the Transport folder:
 ```powershell
-cd custom_components\entur_sx\icons
+cd icons
 $icon = "Funicular"
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/entur/design-system/main/packages/icons/src/svgs/Transport/$icon.svg" -OutFile "$icon.svg"
 ```
