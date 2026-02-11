@@ -6,52 +6,47 @@
 {%- set first_disruption = line_disruptions[0] -%}
 {%- set transport_mode = first_disruption.get('transport_mode', 'bus') -%}
 {%- set badge_svg = first_disruption.get('badge_svg', '') -%}
+{%- set outer_index = loop.index0 -%}
 
-{#- Vis skillelinje før hver oppføring unntatt den første -#}
-{%- if not loop.first %}
+{#- Legg til mellomrom mellom linjegrupper -#}
+{% if outer_index > 0 %}<br>
+{% endif %}
 
----
-
-{%- endif %}
-
-{#- Vis badge én gang for denne linjen -#}
+{#- Første varsel med badge for linjen -#}
+<ha-alert alert-type="error">
 {%- if badge_svg %}
 <img src="{{ badge_svg }}" alt="{{ transport_mode }} {{ line_name }}" height="32">
 {%- endif %}
+</ha-alert>
 
 {#- Vis hvert avvik for denne linjen -#}
 {%- for disruption in line_disruptions %}
-{%- set summary = disruption.get('summary', 'Avvik') -%}
-{%- set description = disruption.get('description', '') -%}
-{%- set valid_from = disruption.get('valid_from_formatted', disruption.get('valid_from', '')) -%}
-{%- set valid_to = disruption.get('valid_to_formatted', disruption.get('valid_to', '')) -%}
+{%- set summary = disruption.get('summary', 'Avvik') %}
+{%- set description = disruption.get('description', '') %}
+{%- set valid_from = disruption.get('valid_from_formatted', disruption.get('valid_from', '')) %}
+{%- set valid_to = disruption.get('valid_to_formatted', disruption.get('valid_to', '')) %}
 
+{# Varsel-banner med avvikstittel #}
+<ha-alert alert-type="error" title="{{ summary }}">
+
+{# Datotabell #}
 <table role="presentation">
-<tr>
-<td>
-📅 <i>{% if valid_from %}Fra: {{ valid_from }}{% endif %}</i>
-</td>
-</tr>
-<tr>
-<td>
-📅 <i>{% if valid_to %}Til: {{ valid_to }}{% else %}{% if valid_from %}Inntil videre{% endif %}{% endif %}</i>
-</td>
-</tr>
+  <tr>
+    <td align="right"><b>Fra:&nbsp;</b></td><td><i>{% if valid_from %}{{ valid_from }}{% endif %}</i></td>
+  </tr>
+  <tr>
+    <td align="right"><b>Til:&nbsp;</b></td><td><i>{% if valid_to %}{{ valid_to }}{% else %}{% if valid_from %}Inntil videre{% endif %}{% endif %}</i></td>
+  </tr>
 </table>
 
+{# Beskrivelsestekst #}
 {%- if description %}
-<ha-alert alert-type="info" title="{{ summary }}">
-
 {{ description }}
 
+{%- endif %}
 </ha-alert>
 
-{% else %}
-**{{ summary }}**
-
-{% endif %}
-
-{%- endfor %}
+{% endfor %}
 
 {%- endfor -%}
 {%- else -%}

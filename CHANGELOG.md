@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserves properly formatted HTML while fixing errors
 
 - **🎨 Enhanced Visual Layout**: Improved disruption display with Home Assistant components
-  - Descriptions now displayed in `<ha-alert>` boxes with summary as title
-  - Table-based date layout for better visual hierarchy
-  - Blue info boxes contain and isolate operator's HTML content
-  - Cleaner separation between multiple disruptions
+  - Banner-style `<ha-alert>` boxes for visual hierarchy
+  - Badge displayed in separate red alert header per transit line
+  - Each disruption shown in its own red alert box with summary as title
+  - Dates displayed in styled table (bold labels, italic values) within alert
+  - Description text contained within alert for proper alignment and background
+  - Clear visual separation when multiple disruptions affect same line
 
 ### Changed
 - **📋 Template-Based Rendering**: Summary sensor now uses Jinja2 templates

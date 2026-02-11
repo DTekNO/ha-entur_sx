@@ -6,52 +6,47 @@
 {%- set first_disruption = line_disruptions[0] -%}
 {%- set transport_mode = first_disruption.get('transport_mode', 'bus') -%}
 {%- set badge_svg = first_disruption.get('badge_svg', '') -%}
+{%- set outer_index = loop.index0 -%}
 
-{#- Show separator before each entry except the first -#}
-{%- if not loop.first %}
+{#- Add spacing between line groups -#}
+{% if outer_index > 0 %}<br>
+{% endif %}
 
----
-
-{%- endif %}
-
-{#- Show badge once for this line -#}
+{#- First alert with badge for the line -#}
+<ha-alert alert-type="error">
 {%- if badge_svg %}
 <img src="{{ badge_svg }}" alt="{{ transport_mode }} {{ line_name }}" height="32">
 {%- endif %}
+</ha-alert>
 
 {#- Show each disruption for this line -#}
 {%- for disruption in line_disruptions %}
-{%- set summary = disruption.get('summary', 'Disruption') -%}
-{%- set description = disruption.get('description', '') -%}
-{%- set valid_from = disruption.get('valid_from_formatted', disruption.get('valid_from', '')) -%}
-{%- set valid_to = disruption.get('valid_to_formatted', disruption.get('valid_to', '')) -%}
+{%- set summary = disruption.get('summary', 'Disruption') %}
+{%- set description = disruption.get('description', '') %}
+{%- set valid_from = disruption.get('valid_from_formatted', disruption.get('valid_from', '')) %}
+{%- set valid_to = disruption.get('valid_to_formatted', disruption.get('valid_to', '')) %}
 
+{# Alert banner with disruption title #}
+<ha-alert alert-type="error" title="{{ summary }}">
+
+{# Date table #}
 <table role="presentation">
-<tr>
-<td>
-📅 <i>{% if valid_from %}From: {{ valid_from }}{% endif %}</i>
-</td>
-</tr>
-<tr>
-<td>
-📅 <i>{% if valid_to %}To: {{ valid_to }}{% else %}{% if valid_from %}Until further notice{% endif %}{% endif %}</i>
-</td>
-</tr>
+  <tr>
+    <td align="right"><b>From:&nbsp;</b></td><td><i>{% if valid_from %}{{ valid_from }}{% endif %}</i></td>
+  </tr>
+  <tr>
+    <td align="right"><b>To:&nbsp;</b></td><td><i>{% if valid_to %}{{ valid_to }}{% else %}{% if valid_from %}Until further notice{% endif %}{% endif %}</i></td>
+  </tr>
 </table>
 
+{# Description text #}
 {%- if description %}
-<ha-alert alert-type="info" title="{{ summary }}">
-
 {{ description }}
+{%- endif %}
 
 </ha-alert>
 
-{% else %}
-**{{ summary }}**
-
-{% endif %}
-
-{%- endfor %}
+{% endfor %}
 
 {%- endfor -%}
 {%- else -%}
