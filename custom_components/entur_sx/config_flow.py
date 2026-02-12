@@ -17,6 +17,7 @@ from .api import EnturSXApiClient
 from .const import (
     CONF_CREATE_SUMMARY_SENSORS,
     CONF_DEVICE_NAME,
+    CONF_LINE_TRANSPORT_MODES,
     CONF_LINES_TO_CHECK,
     CONF_OPERATOR,
     CONF_SUMMARY_ICON,
@@ -261,12 +262,21 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 title = "Entur Disruption"
             
+            # Extract transport modes for selected lines
+            line_transport_modes = {}
+            for line_id in self._selected_lines:
+                line_data = self._available_lines.get(line_id)
+                if isinstance(line_data, dict):
+                    line_transport_modes[line_id] = line_data["transport_mode"]
+                # If it's a string (old format), we'll fall back to heuristics
+            
             return self.async_create_entry(
                 title=title,
                 data={
                     CONF_DEVICE_NAME: self._device_name,
                     CONF_OPERATOR: self._operator,
                     CONF_LINES_TO_CHECK: self._selected_lines,
+                    CONF_LINE_TRANSPORT_MODES: line_transport_modes,
                     CONF_CREATE_SUMMARY_SENSORS: self._create_summary_sensors,
                     CONF_SUMMARY_ICON: self._summary_icon,
                 },
@@ -329,11 +339,19 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Update the config entry with new line selection
+            # Extract transport modes for selected lines
+            line_transport_modes = {}
+            for line_id in user_input[CONF_LINES_TO_CHECK]:
+                line_data = self._available_lines.get(line_id)
+                if isinstance(line_data, dict):
+                    line_transport_modes[line_id] = line_data["transport_mode"]
+            
+            # Update the config entry with new line selection and transport modes
             return self.async_create_entry(
                 title="",
                 data={
                     CONF_LINES_TO_CHECK: user_input[CONF_LINES_TO_CHECK],
+                    CONF_LINE_TRANSPORT_MODES: line_transport_modes,
                 },
             )
 
@@ -365,11 +383,11 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
         line_options = [
             selector.SelectOptionDict(
                 value=line_id,
-                label=line_name
+                label=line_data["display_name"] if isinstance(line_data, dict) else line_data
             )
-            for line_id, line_name in sorted(
+            for line_id, line_data in sorted(
                 self._available_lines.items(), 
-                key=lambda x: _extract_line_number(x[1])
+                key=lambda x: _extract_line_number(x[1]["display_name"] if isinstance(x[1], dict) else x[1])
             )
         ]
 
@@ -394,6 +412,21 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={
                 "device_name": self.config_entry.data.get(CONF_DEVICE_NAME, ""),
-                "operator_name": self._available_lines.get(list(self._available_lines.keys())[0], "").split("(")[0] if self._available_lines else operator,
+                "operator_name": self._get_operator_display_name(operator) if self._available_lines else operator,
             },
         )
+    
+    def _get_operator_display_name(self, operator: str) -> str:
+        """Extract operator display name from first available line."""
+        if not self._available_lines:
+            return operator
+        
+        first_line_data = self._available_lines.get(list(self._available_lines.keys())[0], "")
+        # Handle both dict format (new) and string format (shouldn't happen but defensive)
+        if isinstance(first_line_data, dict):
+            display_name = first_line_data.get("display_name", "")
+        else:
+            display_name = first_line_data
+        
+        # Extract operator name before parenthesis (e.g., "925 - Route (bus)" -> "925 - Route ")
+        return display_name.split("(")[0].strip() if display_name else operator

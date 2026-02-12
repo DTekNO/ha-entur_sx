@@ -759,7 +759,11 @@ class EnturSXApiClient:
                         if transport_mode:
                             display_name += f" ({transport_mode})"
                         
-                        lines[line_id] = display_name
+                        # Store as dict with both display name and transport mode
+                        lines[line_id] = {
+                            "display_name": display_name,
+                            "transport_mode": transport_mode.lower() if transport_mode else "bus"
+                        }
 
                     _LOGGER.debug("Found %d lines for codespace %s", len(lines), operator)
                     return lines

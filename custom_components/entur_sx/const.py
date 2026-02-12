@@ -4,6 +4,7 @@ DOMAIN = "entur_sx"
 # Configuration
 CONF_OPERATOR = "operator"
 CONF_LINES_TO_CHECK = "lines_to_check"
+CONF_LINE_TRANSPORT_MODES = "line_transport_modes"  # Dict mapping line_id -> transport_mode from API
 CONF_DEVICE_NAME = "device_name"
 CONF_CREATE_SUMMARY_SENSORS = "create_summary_sensors"
 CONF_SUMMARY_ICON = "summary_icon"

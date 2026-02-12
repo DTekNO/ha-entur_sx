@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEVICE_NAME,
+    CONF_LINE_TRANSPORT_MODES,
     CONF_SUMMARY_ICON,
     DEFAULT_SUMMARY_ICON,
     DOMAIN,
@@ -332,6 +333,7 @@ async def async_setup_entry(
     # (options takes precedence)
     config_data = {**entry.data, **entry.options}
     lines = config_data.get("lines_to_check", [])
+    line_transport_modes = config_data.get(CONF_LINE_TRANSPORT_MODES, {})
 
     # Get language from HA's setting
     lang = normalize_language(hass.config.language)
@@ -372,7 +374,8 @@ async def async_setup_entry(
     for line_ref in lines:
         # Clean the line name for entity ID (replace : with _)
         line_name = line_ref.replace(":", "_")
-        entities.append(EnturSXSensor(coordinator, entry, line_ref, line_name, template_content, lang))
+        transport_mode = line_transport_modes.get(line_ref)  # May be None for old configs
+        entities.append(EnturSXSensor(coordinator, entry, line_ref, line_name, template_content, lang, transport_mode))
 
     # Create summary sensor if configured
     if config_data.get("create_summary_sensors", False):
@@ -400,11 +403,13 @@ class EnturSXSensor(
         line_name: str,
         template_content: str | None,
         lang: str = "no",
+        transport_mode: str | None = None,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.line_ref = line_ref
         self.line_name = line_name
+        self.transport_mode = transport_mode  # Store API-provided transport mode (may be None for old configs)
 
         device_name = entry.data.get(CONF_DEVICE_NAME, "Entur Avvik")
 
@@ -441,7 +446,8 @@ class EnturSXSensor(
         """Return the entity picture as a TravelTag badge."""
         if self._badge_svg_cache is None:
             # Generate badge once and cache it
-            transport_mode = _detect_transport_mode(self.line_ref)
+            # Use stored transport mode from API if available, otherwise fall back to heuristic
+            transport_mode = self.transport_mode if self.transport_mode else _detect_transport_mode(self.line_ref)
             line_name = self.line_ref.split(":")[-1]
             self._badge_svg_cache = _create_badge_svg(transport_mode, line_name)
         
@@ -470,8 +476,8 @@ class EnturSXSensor(
         if not disruptions:
             disruptions = []
         
-        # Detect transport mode for this line
-        transport_mode = _detect_transport_mode(self.line_ref)
+        # Use stored transport mode from API if available, otherwise fall back to heuristic
+        transport_mode = self.transport_mode if self.transport_mode else _detect_transport_mode(self.line_ref)
         line_name = self.line_ref.split(":")[-1]  # Extract just the line number
         
         # Create the badge SVG
