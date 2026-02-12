@@ -48,7 +48,7 @@ Based on Entur AS official app icon design. Entur branding used with respect to 
 
 **Links:**
 - Entur official branding: https://linje.entur.no/identitet/verktoykassen/logo
-- Integration repository: https://github.com/jm-cook/ha-entur_sx
+- Integration repository: https://github.com/DTekNO/ha-entur_sx
 ```
 
 ## Verification

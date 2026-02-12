@@ -1,9 +1,10 @@
 # Entur Situation Exchange Custom Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/DTekNO/ha-entur_sx)
-[![Validate with HACS](https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml/badge.svg)](https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml)
-[![GitHub Release](https://img.shields.io/github/release/DTekNO/ha-entur_sx.svg)](https://github.com/DTekNO/ha-entur_sx/releases)
-![Project Maintenance](https://img.shields.io/maintenance/yes/2026.svg)
+[![hacs][hacs-badge]][hacs-url]
+[![Validate with HACS][hacs-validation-badge]][hacs-validation-url]
+[![release][release-badge]][release-url]
+![Maintenance][maintenance-badge]
+![downloads][downloads-badge]
 
 Stay ahead of transport delays and disruptions across Norway! This Home Assistant custom integration monitors real-time service deviations from Entur.no, alerting you to delays, cancellations, and route changes on your regular transit lines.
 
@@ -563,3 +564,13 @@ This project is licensed under the MIT License.
 - Original AppDaemon version by Jeremy Cook
 - Converted to native Home Assistant custom integration
 - Data provided by [Entur AS](https://entur.no)
+
+<!-- Badge definitions -->
+[hacs-badge]: https://img.shields.io/badge/HACS-Custom-orange.svg
+[hacs-url]: https://github.com/DTekNO/ha-entur_sx
+[hacs-validation-badge]: https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml/badge.svg
+[hacs-validation-url]: https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml
+[maintenance-badge]: https://img.shields.io/maintenance/yes/2026.svg
+[release-badge]: https://img.shields.io/github/release/DTekNO/ha-entur_sx.svg
+[release-url]: https://github.com/DTekNO/ha-entur_sx/releases
+[downloads-badge]: https://img.shields.io/github/downloads/DTekNO/ha-entur_sx/total
