@@ -33,6 +33,46 @@ from .icon_constants import TRANSPORT_COLORS, TRANSPORT_ICONS
 
 _LOGGER = logging.getLogger(__name__)
 
+# Map Entur API transport mode values to icon keys
+TRANSPORT_MODE_MAPPING = {
+    "water": "ferry",      # Entur uses "water" for ferry routes
+    "rail": "train",      # Entur uses "rail" for train routes
+    "air": "plane",       # Entur uses "air" for flights
+    "coach": "bus",       # Coach is a type of bus
+}
+
+# Map transport submodes to differentiate ferry types
+# Based on actual values from Entur API (converted to lowercase)
+TRANSPORT_SUBMODE_MAPPING = {
+    "localcarferry": "carferry",           # Car ferries (discovered from Skyss)
+    "regionalcarferry": "carferry",        # Regional car ferry service
+    "localpassengerferry": "ferry",        # Passenger ferries (explicit, though falls back correctly)
+    "regionalpassengerferry": "ferry",     # Regional passenger ferry
+}
+
+def _map_transport_mode(api_mode: str | None, api_submode: str | None = None) -> str:
+    """Map Entur API transport mode and submode to icon key.
+    
+    Args:
+        api_mode: Transport mode from Entur API (e.g., 'water', 'rail', 'bus')
+        api_submode: Transport submode for more specific classification (e.g., 'localCarFerry')
+        
+    Returns:
+        Mapped transport mode for icon lookup, defaults to 'bus'
+    """
+    if not api_mode:
+        return "bus"
+    
+    mode_lower = api_mode.lower()
+    submode_lower = api_submode.lower() if api_submode else ""
+    
+    # Check if submode provides more specific mapping (e.g., carferry vs ferry)
+    if submode_lower and submode_lower in TRANSPORT_SUBMODE_MAPPING:
+        return TRANSPORT_SUBMODE_MAPPING[submode_lower]
+    
+    # Fall back to mode-based mapping
+    return TRANSPORT_MODE_MAPPING.get(mode_lower, mode_lower)
+
 
 class HTMLSanitizer(HTMLParser):
     """Simple HTML parser to fix unclosed tags."""
@@ -412,7 +452,13 @@ class EnturSXSensor(
         if self._badge_svg_cache is None:
             # Generate badge once and cache it
             # Use stored transport mode from API, default to "bus" if not available (old configs)
-            transport_mode = self.transport_mode or "bus"
+            raw_mode = self.transport_mode or "bus"
+            # Split mode:submode format
+            if ":" in raw_mode:
+                mode, submode = raw_mode.split(":", 1)
+            else:
+                mode, submode = raw_mode, None
+            transport_mode = _map_transport_mode(mode, submode)
             line_name = self.line_ref.split(":")[-1]
             self._badge_svg_cache = _create_badge_svg(transport_mode, line_name)
         
@@ -444,7 +490,13 @@ class EnturSXSensor(
         # Use the entity_picture (which has correct transport mode from API)
         badge_svg = self.entity_picture
         line_name = self.line_ref.split(":")[-1]  # Extract just the line number
-        transport_mode = self.transport_mode or "bus"
+        raw_mode = self.transport_mode or "bus"
+        # Split mode:submode format
+        if ":" in raw_mode:
+            mode, submode = raw_mode.split(":", 1)
+        else:
+            mode, submode = raw_mode, None
+        transport_mode = _map_transport_mode(mode, submode)
         
         # Prepare disruption data with badge SVG and formatted dates
         enriched_disruptions = []

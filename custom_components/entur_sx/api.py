@@ -706,6 +706,7 @@ class EnturSXApiClient:
             name
             publicCode
             transportMode
+            transportSubmode
             authority {
               id
             }
@@ -742,6 +743,7 @@ class EnturSXApiClient:
                         line_name = line.get("name", "")
                         public_code = line.get("publicCode", "")
                         transport_mode = line.get("transportMode", "")
+                        transport_submode = line.get("transportSubmode", "")
                         
                         # Create a friendly display name
                         display_name = f"{public_code}"
@@ -750,15 +752,16 @@ class EnturSXApiClient:
                         if transport_mode:
                             display_name += f" ({transport_mode})"
                         
-                        # Store as dict with both display name and transport mode
+                        # Store as dict with display name, transport mode, and submode
                         lines[line_id] = {
                             "display_name": display_name,
-                            "transport_mode": transport_mode.lower() if transport_mode else "bus"
+                            "transport_mode": transport_mode.lower() if transport_mode else "bus",
+                            "transport_submode": transport_submode.lower() if transport_submode else ""
                         }
                         
-                        # Debug log for line 12 specifically
-                        if "Line:12" in line_id:
-                            _LOGGER.info("[API] Line 12 found: %s -> transport_mode='%s'", line_id, transport_mode)
+                        # Debug log for specific lines
+                        if "Line:12" in line_id or "Line:1021" in line_id:
+                            _LOGGER.debug("[API] %s found: mode='%s' submode='%s'", line_id, transport_mode, transport_submode or "(none)")
 
                     _LOGGER.debug("Found %d lines for codespace %s", len(lines), operator)
                     return lines

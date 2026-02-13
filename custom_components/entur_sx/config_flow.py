@@ -180,6 +180,9 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="device_name",
                 data_schema=vol.Schema({vol.Required(CONF_DEVICE_NAME): str}),
                 errors=errors,
+                description_placeholders={
+                    "operator": self._operator_name or "",
+                },
             )
 
     async def async_step_select_operator(
@@ -209,11 +212,11 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         line_options = [
             selector.SelectOptionDict(
                 value=line_id,
-                label=line_name
+                label=line_data["display_name"] if isinstance(line_data, dict) else line_data
             )
-            for line_id, line_name in sorted(
+            for line_id, line_data in sorted(
                 self._available_lines.items(), 
-                key=lambda x: _extract_line_number(x[1])
+                key=lambda x: _extract_line_number(x[1]["display_name"] if isinstance(x[1], dict) else x[1])
             )
         ]
 
@@ -262,16 +265,23 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 title = "Entur Disruption"
             
-            # Extract transport modes for selected lines
+            # Extract transport modes and submodes for selected lines
+            # Store as "mode:submode" for easy splitting later
             line_transport_modes = {}
             for line_id in self._selected_lines:
                 line_data = self._available_lines.get(line_id)
                 if isinstance(line_data, dict):
-                    line_transport_modes[line_id] = line_data["transport_mode"]
-                    # Debug log for line 12
-                    if "Line:12" in line_id:
-                        _LOGGER.info("[CONFIG FLOW] Storing line 12: %s -> transport_mode='%s'", line_id, line_data["transport_mode"])
-                # If it's a string (old format), we'll fall back to heuristics
+                    mode = line_data.get("transport_mode", "bus")
+                    submode = line_data.get("transport_submode", "")
+                    # Store as "mode:submode" or just "mode" if no submode
+                    if submode:
+                        line_transport_modes[line_id] = f"{mode}:{submode}"
+                    else:
+                        line_transport_modes[line_id] = mode
+                    # Debug log
+                    if "Line:12" in line_id or "Line:1021" in line_id:
+                        _LOGGER.info("[CONFIG FLOW] Storing %s -> mode='%s' submode='%s'", line_id, mode, submode or "(none)")
+                # If it's a string (old format), we'll fall back to defaults
             
             return self.async_create_entry(
                 title=title,
@@ -342,15 +352,21 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Extract transport modes for selected lines
+            # Extract transport modes and submodes for selected lines
             line_transport_modes = {}
             for line_id in user_input[CONF_LINES_TO_CHECK]:
                 line_data = self._available_lines.get(line_id)
                 if isinstance(line_data, dict):
-                    line_transport_modes[line_id] = line_data["transport_mode"]
-                    # Debug log for line 12
-                    if "Line:12" in line_id:
-                        _LOGGER.info("[OPTIONS FLOW] Storing line 12: %s -> transport_mode='%s'", line_id, line_data["transport_mode"])
+                    mode = line_data.get("transport_mode", "bus")
+                    submode = line_data.get("transport_submode", "")
+                    # Store as "mode:submode" or just "mode" if no submode
+                    if submode:
+                        line_transport_modes[line_id] = f"{mode}:{submode}"
+                    else:
+                        line_transport_modes[line_id] = mode
+                    # Debug log
+                    if "Line:12" in line_id or "Line:1021" in line_id:
+                        _LOGGER.info("[OPTIONS FLOW] Storing %s -> mode='%s' submode='%s'", line_id, mode, submode or "(none)")
             
             # Update the config entry with new line selection and transport modes
             return self.async_create_entry(
