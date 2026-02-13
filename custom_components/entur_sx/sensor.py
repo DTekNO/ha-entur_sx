@@ -190,45 +190,6 @@ def _format_datetime_norwegian(dt: datetime) -> str:
     return f"{day_name}, {dt.day:02d}. {month_name} kl. {dt.strftime('%H:%M')}"
 
 
-def _detect_transport_mode(line_ref: str) -> str:
-    """Detect transport mode from line reference.
-    
-    Entur line references follow pattern: Authority:Line:LineNumber
-    Examples:
-    - RUT:Line:1 (Oslo tram line 1)
-    - ATB:Line:3 (Trondheim bus line 3)
-    - NSB:Line:L1 (train)
-    
-    For now, use simple heuristics based on line number patterns.
-    Future: Could query Entur API for line details.
-    """
-    # Default to bus if uncertain
-    transport_mode = "bus"
-    
-    # Tram lines in Norway are typically numbered 11-19 or single digits 1-9 in Oslo
-    # Train lines often have 'L' prefix or are in higher ranges
-    # Ferry lines often contain 'F' or specific patterns
-    
-    line_parts = line_ref.split(":")
-    if len(line_parts) >= 3:
-        line_number = line_parts[-1].upper()
-        
-        # Train patterns
-        if line_number.startswith("L") or line_number.startswith("R"):
-            transport_mode = "train"
-        # Tram patterns (Oslo/Bergen)
-        elif line_number.isdigit() and 11 <= int(line_number) <= 19:
-            transport_mode = "tram"
-        # Metro patterns
-        elif line_number.isdigit() and 1 <= int(line_number) <= 6:
-            # Could be tram or metro - check authority
-            if "RUT" in line_ref:
-                transport_mode = "metro"
-            else:
-                transport_mode = "tram"
-    
-    return transport_mode
-
 
 def _create_badge_svg(transport_mode: str, line_name: str) -> str:
     """Create a complete SVG badge as a data URL.
@@ -379,12 +340,12 @@ async def async_setup_entry(
 
     # Create summary sensor if configured
     if config_data.get("create_summary_sensors", False):
-        entities.append(EnturSXSummarySensor(coordinator, entry, lines, template_content, lang))
+        entities.append(EnturSXSummarySensor(coordinator, entry, lines, template_content, lang, line_transport_modes))
 
     _LOGGER.info("Setting up %d Entur SX sensors", len(entities))
-    # Update entities immediately with coordinator's existing data
-    # before adding
-    async_add_entities(entities, True)
+    # Don't force immediate update (False) - coordinator already fetched in async_setup_entry
+    # This prevents double API call during setup
+    async_add_entities(entities, False)
 
 
 class EnturSXSensor(
@@ -410,6 +371,10 @@ class EnturSXSensor(
         self.line_ref = line_ref
         self.line_name = line_name
         self.transport_mode = transport_mode  # Store API-provided transport mode (may be None for old configs)
+        
+        # Debug log for line 12
+        if "Line:12" in line_ref:
+            _LOGGER.info("[SENSOR INIT] Line 12 sensor created: %s -> transport_mode='%s'", line_ref, transport_mode)
 
         device_name = entry.data.get(CONF_DEVICE_NAME, "Entur Avvik")
 
@@ -446,8 +411,8 @@ class EnturSXSensor(
         """Return the entity picture as a TravelTag badge."""
         if self._badge_svg_cache is None:
             # Generate badge once and cache it
-            # Use stored transport mode from API if available, otherwise fall back to heuristic
-            transport_mode = self.transport_mode if self.transport_mode else _detect_transport_mode(self.line_ref)
+            # Use stored transport mode from API, default to "bus" if not available (old configs)
+            transport_mode = self.transport_mode or "bus"
             line_name = self.line_ref.split(":")[-1]
             self._badge_svg_cache = _create_badge_svg(transport_mode, line_name)
         
@@ -476,12 +441,10 @@ class EnturSXSensor(
         if not disruptions:
             disruptions = []
         
-        # Use stored transport mode from API if available, otherwise fall back to heuristic
-        transport_mode = self.transport_mode if self.transport_mode else _detect_transport_mode(self.line_ref)
+        # Use the entity_picture (which has correct transport mode from API)
+        badge_svg = self.entity_picture
         line_name = self.line_ref.split(":")[-1]  # Extract just the line number
-        
-        # Create the badge SVG
-        badge_svg = _create_badge_svg(transport_mode, line_name)
+        transport_mode = self.transport_mode or "bus"
         
         # Prepare disruption data with badge SVG and formatted dates
         enriched_disruptions = []
@@ -670,11 +633,13 @@ class EnturSXSummarySensor(
         lines: list[str],
         template_content: str | None,
         lang: str = "no",
+        line_transport_modes: dict[str, str] | None = None,
     ) -> None:
         """Initialize the summary sensor."""
         super().__init__(coordinator)
         self.lines = lines
         self._lang = lang
+        self.line_transport_modes = line_transport_modes or {}
         
         # Store pre-loaded template content
         self._template_content = template_content
@@ -769,8 +734,8 @@ class EnturSXSummarySensor(
                 normal.append(line_ref)
                 continue
 
-            # Detect transport mode and create badge for this line
-            transport_mode = _detect_transport_mode(line_ref)
+            # Use stored transport mode from API, default to "bus" if not available (old configs)
+            transport_mode = self.line_transport_modes.get(line_ref) or "bus"
             line_name = line_ref.split(":")[-1]
             badge_svg = _create_badge_svg(transport_mode, line_name)
 

@@ -316,45 +316,36 @@ class EnturSXApiClient:
             # Timeout must accommodate quota waits: 20 pages with potential 60s waits
             async with async_timeout.timeout(350):
                 while page_count < max_pages:
-                    # CRITICAL: Check quota through GLOBAL manager before every request
-                    # This ensures all API clients, coordinators, and config flows respect the same quota
+                    # CRITICAL: Check quota and record request atomically under lock
+                    # This prevents race conditions where multiple requests bypass quota checks
                     async with self._quota_manager._lock:
                         internal_used = len(self._quota_manager.request_timestamps)
                         can_proceed, reason = self._quota_manager.can_make_request()
                         
-                        # Log quota state for debugging (only if we've made requests before)
-                        if internal_used > 0:
-                            _LOGGER.debug(
-                                "[%s] Quota check before page %d: %d/4 requests in last 60s, can_proceed=%s",
-                                self._operator_code or "ALL",
-                                page_count + 1,
-                                internal_used,
-                                can_proceed
-                            )
-                        
+                        # If we can't proceed, wait for quota (lock will be released during await)
                         if not can_proceed:
-                            # Release lock before waiting
+                            wait_time = self._quota_manager.get_seconds_until_quota_available()
                             _LOGGER.info(
-                                "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s.",
+                                "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s. Waiting %.1f seconds.",
                                 self._operator_code or "ALL",
                                 page_count + 1,
                                 reason,
-                                internal_used
+                                internal_used,
+                                wait_time
                             )
-                    
-                    # If we can't proceed, wait outside the lock
-                    if not can_proceed:
-                        await self._quota_manager.wait_for_quota()
-                        _LOGGER.info(
-                            "[%s] Quota restored, resuming for page %d",
-                            self._operator_code or "ALL",
-                            page_count + 1
-                        )
-                    
-                    page_count += 1
-                    
-                    # Record this request in the GLOBAL quota manager
-                    self._quota_manager.record_request(self._operator_code)
+                            # Sleep releases the lock, then re-acquires on completion
+                            await asyncio.sleep(wait_time)
+                            # Re-check quota after wait
+                            can_proceed, reason = self._quota_manager.can_make_request()
+                            _LOGGER.info(
+                                "[%s] Quota restored, resuming for page %d",
+                                self._operator_code or "ALL",
+                                page_count + 1
+                            )
+                        
+                        # Record this request BEFORE making it (still under lock for atomicity)
+                        page_count += 1
+                        self._quota_manager.record_request(self._operator_code)
                     
                     # Add requestorId parameter for pagination
                     url = f"{self._service_url}&requestorId={requestor_id}" if "?" in self._service_url else f"{self._service_url}?requestorId={requestor_id}"
@@ -764,6 +755,10 @@ class EnturSXApiClient:
                             "display_name": display_name,
                             "transport_mode": transport_mode.lower() if transport_mode else "bus"
                         }
+                        
+                        # Debug log for line 12 specifically
+                        if "Line:12" in line_id:
+                            _LOGGER.info("[API] Line 12 found: %s -> transport_mode='%s'", line_id, transport_mode)
 
                     _LOGGER.debug("Found %d lines for codespace %s", len(lines), operator)
                     return lines

@@ -268,6 +268,9 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 line_data = self._available_lines.get(line_id)
                 if isinstance(line_data, dict):
                     line_transport_modes[line_id] = line_data["transport_mode"]
+                    # Debug log for line 12
+                    if "Line:12" in line_id:
+                        _LOGGER.info("[CONFIG FLOW] Storing line 12: %s -> transport_mode='%s'", line_id, line_data["transport_mode"])
                 # If it's a string (old format), we'll fall back to heuristics
             
             return self.async_create_entry(
@@ -345,6 +348,9 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
                 line_data = self._available_lines.get(line_id)
                 if isinstance(line_data, dict):
                     line_transport_modes[line_id] = line_data["transport_mode"]
+                    # Debug log for line 12
+                    if "Line:12" in line_id:
+                        _LOGGER.info("[OPTIONS FLOW] Storing line 12: %s -> transport_mode='%s'", line_id, line_data["transport_mode"])
             
             # Update the config entry with new line selection and transport modes
             return self.async_create_entry(
