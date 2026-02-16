@@ -113,23 +113,15 @@ The integration creates one sensor for each monitored line. Each sensor shows:
 
 If enabled, a summary sensor is created that aggregates all monitored lines:
 
-- **State**: Numeric count of active disruptions (0, 1, 2, etc.) - perfect for conditional card visibility
+- **State**: Numeric count of all disruptions (open + planned) - perfect for conditional card visibility
 - **Attributes**:
-  - `markdown_active`: Markdown with badges for all lines with active (open) disruptions
-  - `markdown_planned`: Markdown with badges for all lines with planned disruptions
+  - `markdown_active`: Markdown with badges for all lines with active (open) disruptions only
+  - `markdown_planned`: Markdown with badges for all lines with planned disruptions only
+  - `active_disruptions`: Count of active (open) disruptions
+  - `planned_disruptions`: Count of planned disruptions
   - `lines`: List of all monitored lines
 
-The numeric state makes it easy to show/hide cards:
-```yaml
-type: conditional
-conditions:
-  - condition: numeric_state
-    entity: sensor.skyss_disruption_summary
-    above: 0
-card:
-  type: markdown
-  content: {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
-```
+The numeric state makes it easy to show/hide cards based on whether any disruptions exist.
 
 ### Display with Markdown Cards
 
@@ -160,15 +152,6 @@ card:
     {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
 ```
 
-#### Planned Disruptions Preview
-
-```yaml
-type: markdown
-content: |
-  # 📅 Upcoming Disruptions
-  {{ state_attr('sensor.skyss_disruption_summary', 'markdown_planned') }}
-```
-
 **Badge Features:**
 - **Transport mode badges** with official Entur Design System colors and icons
   - 12 transport modes: bus, train, tram, ferry, metro, mobility, bicycle, walk, plane, helicopter, taxi, carferry
@@ -186,7 +169,7 @@ content: |
   - Entity pictures on line sensors
   - Markdown badges in formatted_content
   - 12 transport modes with authentic Entur Design System styling
-- 📊 **Summary sensor** - Numeric count of active disruptions for easy card visibility control
+- 📊 **Summary sensor** - Numeric count of total disruptions (open + planned) for easy card visibility control
 - 🌍 **Language support** - Automatic Norwegian/English based on your Home Assistant language setting
   - Norwegian: "Fra: Mandag, 09. februar kl. 14:30"
   - English: "From: Monday, 09 February at 14:30"
@@ -357,7 +340,7 @@ entities:
   - entity: sensor.skyss_disruption_sky_line_20
 ```
 
-### Summary Card (Show Only When Disruptions Exist)
+### Summary Card - Show When Any Disruptions Exist
 
 ```yaml
 type: conditional
@@ -367,9 +350,39 @@ conditions:
     above: 0
 card:
   type: markdown
+  title: 🚨 Transit Disruptions
+  content: |
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_planned') }}
+```
+
+### Summary Card - Active Disruptions Only
+
+If you want to show only active disruptions:
+
+```yaml
+type: conditional
+conditions:
+  - condition: "{{ state_attr('sensor.skyss_disruption_summary', 'active_disruptions') > 0 }}"
+card:
+  type: markdown
   title: 🚨 Active Transit Disruptions
   content: |
     {{ state_attr('sensor.skyss_disruption_summary', 'markdown_active') }}
+```
+
+### Summary Card - Planned Disruptions Only
+
+```yaml
+type: conditional
+conditions:
+  - condition: template
+    value_template: "{{ state_attr('sensor.skyss_disruption_summary', 'planned_disruptions') > 0 }}"
+card:
+  type: markdown
+  title: 📅 Upcoming Disruptions
+  content: |
+    {{ state_attr('sensor.skyss_disruption_summary', 'markdown_planned') }}
 ```
 
 ### Individual Line Detail Card
@@ -421,7 +434,7 @@ show_state: true
 
 ### Alert When Any Disruption Becomes Active
 
-Using the summary sensor to monitor all lines at once:
+Using the summary sensor to monitor all lines at once (triggers on both active and planned disruptions):
 
 ```yaml
 automation:
@@ -435,7 +448,24 @@ automation:
         data:
           title: "Transit Disruptions Detected"
           message: >
-            {{ states('sensor.skyss_disruption_summary') }} active disruption(s).
+            {{ states('sensor.skyss_disruption_summary') }} disruption(s) detected.
+            Check Home Assistant for details.
+```
+
+### Alert Only on Active Disruptions
+
+```yaml
+automation:
+  - alias: "Active Transit Disruption Alert"
+    trigger:
+      - platform: template
+        value_template: "{{ state_attr('sensor.skyss_disruption_summary', 'active_disruptions') > 0 }}"
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "Active Transit Disruptions"
+          message: >
+            {{ state_attr('sensor.skyss_disruption_summary', 'active_disruptions') }} active disruption(s).
             Check Home Assistant for details.
 ```
 
@@ -497,7 +527,7 @@ Key differences:
 - **No MQTT broker required**
 - **No AppDaemon required**
 - **TravelTag badges**: Beautiful badges on entity pictures and in markdown content
-- **Summary sensor**: Numeric count of active disruptions for all monitored lines
+- **Summary sensor**: Numeric count of total disruptions (open + planned) for all monitored lines
 - **Language support**: Automatic Norwegian/English based on HA settings
 - **Date formatting**: Locale-aware formatting (e.g., "Mandag, 09. februar kl. 14:30" vs ISO timestamps)
 - **formatted_content attribute**: Rich markdown with badges for use in markdown cards

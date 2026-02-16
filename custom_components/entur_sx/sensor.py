@@ -231,6 +231,72 @@ def _format_datetime_norwegian(dt: datetime) -> str:
 
 
 
+def _create_icon_svg(transport_mode: str) -> str:
+    """Create a square transport mode icon with padding as a data URL.
+    
+    Creates a simple square icon suitable for entity_picture:
+    - Transport mode icon scaled to 512x512 (high resolution)
+    - Colored background matching transport mode
+    - 25% margin (128px on all sides)
+    - Total size: 768x768
+    - Centered in viewBox for proper display
+    
+    Args:
+        transport_mode: The transport mode (bus, train, ferry, etc.)
+        
+    Returns:
+        Data URL containing the SVG icon
+    """
+    import base64
+    import re
+    
+    # Get icon and color from constants
+    icon_data_url = TRANSPORT_ICONS.get(transport_mode, TRANSPORT_ICONS["bus"])
+    bg_color = TRANSPORT_COLORS.get(transport_mode, TRANSPORT_COLORS["bus"])
+    
+    # Icon dimensions and padding (high resolution for entity picture)
+    ICON_SIZE = 512  # Original is 16x16, scale by 32x
+    SCALE_FACTOR = 32  # Scale from 16x16 to 512x512
+    PADDING = 128  # 25% margin (512 * 0.25)
+    TOTAL_SIZE = ICON_SIZE + (PADDING * 2)  # 768x768
+    
+    # Extract the base64 content from icon data URL
+    prefix = "data:image/svg+xml;base64,"
+    if not icon_data_url.startswith(prefix):
+        return ""
+    
+    icon_base64 = icon_data_url[len(prefix):].strip()
+    # Normalize base64 padding (must be multiple of 4)
+    icon_base64 += '=' * (4 - len(icon_base64) % 4) if len(icon_base64) % 4 else ''
+    icon_svg = base64.b64decode(icon_base64).decode('utf-8')
+    
+    # Extract all content between <svg> and </svg> tags
+    svg_content_match = re.search(r'<svg[^>]*>(.*?)</svg>', icon_svg, re.DOTALL)
+    if not svg_content_match:
+        return ""
+    
+    icon_content = svg_content_match.group(1)
+    # Ensure all fill colors are white
+    icon_content = re.sub(r'fill="[^"]*"', 'fill="#FFFFFF"', icon_content)
+    # Remove any comments or XML declarations that might be in the content
+    icon_content = re.sub(r'<!--.*?-->', '', icon_content, flags=re.DOTALL)
+    icon_content = icon_content.strip()
+    
+    # Create square icon with padding
+    # Use viewBox to add padding around the icon (centered)
+    # Scale the icon content from 16x16 to 512x512
+    icon_svg_output = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{TOTAL_SIZE}" height="{TOTAL_SIZE}" viewBox="-{PADDING} -{PADDING} {TOTAL_SIZE} {TOTAL_SIZE}">
+  <rect x="-{PADDING}" y="-{PADDING}" width="{TOTAL_SIZE}" height="{TOTAL_SIZE}" fill="{bg_color}"/>
+  <g transform="scale({SCALE_FACTOR})">
+    {icon_content}
+  </g>
+</svg>'''
+    
+    # Encode as data URL
+    icon_base64_out = base64.b64encode(icon_svg_output.encode('utf-8')).decode('utf-8')
+    return f"data:image/svg+xml;base64,{icon_base64_out}"
+
+
 def _create_badge_svg(transport_mode: str, line_name: str) -> str:
     """Create a complete SVG badge as a data URL.
     
@@ -394,7 +460,7 @@ class EnturSXSensor(
     """Sensor for a single Entur transit line deviation status."""
 
     _attr_has_entity_name = True
-    _unrecorded_attributes = frozenset({"formatted_content", "entity_picture"})
+    _unrecorded_attributes = frozenset({"formatted_content", "entity_picture", "travel_tag"})
 
     def __init__(
         self,
@@ -443,12 +509,30 @@ class EnturSXSensor(
         if template_content:
             self._compile_template(template_content)
 
-        # Cache for badge SVG (generated once per line)
+        # Cache for icon and badge SVGs (generated once per line)
+        self._icon_svg_cache = None
         self._badge_svg_cache = None
 
     @property
     def entity_picture(self) -> str | None:
-        """Return the entity picture as a TravelTag badge."""
+        """Return the entity picture as transport mode icon only (square with padding)."""
+        if self._icon_svg_cache is None:
+            # Generate icon once and cache it
+            # Use stored transport mode from API, default to "bus" if not available (old configs)
+            raw_mode = self.transport_mode or "bus"
+            # Split mode:submode format
+            if ":" in raw_mode:
+                mode, submode = raw_mode.split(":", 1)
+            else:
+                mode, submode = raw_mode, None
+            transport_mode = _map_transport_mode(mode, submode)
+            self._icon_svg_cache = _create_icon_svg(transport_mode)
+        
+        return self._icon_svg_cache
+    
+    @property
+    def travel_tag(self) -> str | None:
+        """Return the travel tag badge with line number (for use in templates)."""
         if self._badge_svg_cache is None:
             # Generate badge once and cache it
             # Use stored transport mode from API, default to "bus" if not available (old configs)
@@ -487,8 +571,8 @@ class EnturSXSensor(
         if not disruptions:
             disruptions = []
         
-        # Use the entity_picture (which has correct transport mode from API)
-        badge_svg = self.entity_picture
+        # Use the travel_tag (badge with line number) for templates
+        travel_tag = self.travel_tag
         line_name = self.line_ref.split(":")[-1]  # Extract just the line number
         raw_mode = self.transport_mode or "bus"
         # Split mode:submode format
@@ -504,7 +588,7 @@ class EnturSXSensor(
             enriched = disruption.copy()
             enriched["transport_mode"] = transport_mode
             enriched["line_name"] = line_name
-            enriched["badge_svg"] = badge_svg
+            enriched["travel_tag"] = travel_tag
             
             # Sanitize description HTML to fix unclosed tags from API
             if "description" in enriched and enriched["description"]:
@@ -650,6 +734,7 @@ class EnturSXSensor(
             "status": current.get("status"),
             "progress": current.get("progress"),
             "line_ref": self.line_ref,
+            "travel_tag": self.travel_tag,  # Full badge with line number for template use
         }
 
         # Include all deviations if there are multiple
@@ -692,6 +777,7 @@ class EnturSXSummarySensor(
         self.lines = lines
         self._lang = lang
         self.line_transport_modes = line_transport_modes or {}
+        self._entry_id = entry.entry_id
         
         # Store pre-loaded template content
         self._template_content = template_content
@@ -738,24 +824,26 @@ class EnturSXSummarySensor(
 
     @property
     def native_value(self) -> int:
-        """Return simple state based on active (open) disruption count."""
+        """Return simple state based on total disruption count (open + planned)."""
         if not self.coordinator.data:
             return 0
 
-        active_count = 0
+        disrupted_lines = set()
         for line_ref in self.lines:
             line_data = self.coordinator.data.get(line_ref, [])
             # Empty line_data means no disruptions for this line
             if not line_data:
                 continue
                 
-            # Check if line has active (open) disruptions
-            status = line_data[0].get("status")
-            if status == STATUS_OPEN:
-                active_count += 1
+            # Check if line has any non-expired deviations
+            for deviation in line_data:
+                status = deviation.get("status")
+                if status in (STATUS_OPEN, STATUS_PLANNED):
+                    disrupted_lines.add(line_ref)
+                    break  # Count this line once
 
         # Return numeric state for easy filtering/automation
-        return active_count
+        return len(disrupted_lines)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -786,10 +874,21 @@ class EnturSXSummarySensor(
                 normal.append(line_ref)
                 continue
 
-            # Use stored transport mode from API, default to "bus" if not available (old configs)
+            # Get travel_tag from the line sensor entity
+            line_name = line_ref.replace(":", "_")
+            line_entity_id = f"sensor.{self._entry_id}_{line_name}"
+            line_state = self.hass.states.get(line_entity_id) if self.hass else None
+            badge_svg = line_state.attributes.get("travel_tag") if line_state else None
+            
+            # Fallback to generating badge if entity not found (shouldn't happen)
+            if not badge_svg:
+                transport_mode = self.line_transport_modes.get(line_ref) or "bus"
+                line_display_name = line_ref.split(":")[-1]
+                badge_svg = _create_badge_svg(transport_mode, line_display_name)
+            
+            # Extract transport mode and line display name for template
             transport_mode = self.line_transport_modes.get(line_ref) or "bus"
-            line_name = line_ref.split(":")[-1]
-            badge_svg = _create_badge_svg(transport_mode, line_name)
+            line_display_name = line_ref.split(":")[-1]
 
             # Track if this line has any non-expired deviations
             has_active = False
@@ -839,9 +938,9 @@ class EnturSXSummarySensor(
                 
                 # Build enriched disruption dict for template
                 disruption_dict = {
+                    'line_name': line_display_name,
                     'transport_mode': transport_mode,
-                    'line_name': line_name,
-                    'badge_svg': badge_svg,
+                    'travel_tag': badge_svg,
                     'summary': summary,
                     'description': description,
                     'valid_from_formatted': valid_from_formatted,
