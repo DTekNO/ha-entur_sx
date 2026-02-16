@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **📊 Summary Sensor Attributes**: Simplified summary sensor to focus on separation by status
+  - Removed `formatted_content` attribute (combined disruptions)
+  - Kept `markdown_active` for active (open) disruptions only
+  - Kept `markdown_planned` for planned disruptions only
+  - Summary sensor now references line sensors' `travel_tag` attribute for consistency
+  - Ensures badges are identical between line sensors and summary views
+
+### Fixed
+- **🔧 Template Rendering**: Fixed template error when rendering summary markdown
+  - Added required `line_name` and `transport_mode` fields to disruption dictionaries
+  - Resolves "dict object has no attribute 'line_name'" error in planned disruptions
+- **📊 Summary Sensor State**: Fixed state calculation to count all disruptions (open + planned)
+  - State now correctly returns count of lines with any non-expired disruptions
+  - Ensures consistent behavior for conditional card visibility
+
 ## [2026.02.2]
 
 ### Added
