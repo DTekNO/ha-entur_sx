@@ -19,9 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **🔧 Template Rendering**: Fixed template error when rendering summary markdown
   - Added required `line_name` and `transport_mode` fields to disruption dictionaries
   - Resolves "dict object has no attribute 'line_name'" error in planned disruptions
-- **📊 Summary Sensor State**: Fixed state calculation to count all disruptions (open + planned)
-  - State now correctly returns count of lines with any non-expired disruptions
-  - Ensures consistent behavior for conditional card visibility
+- **📊 Summary Sensor State & Attributes**: Fixed calculation of disruptions
+  - Removed incorrect check for STATE_NORMAL in first deviation that was filtering out valid disruptions
+  - Summary sensor now correctly counts and displays all planned disruptions
+  - State now accurately reflects count of all lines with non-expired disruptions (open + planned)
+  - Attributes (`planned_disruptions`, `markdown_planned`) now correctly populated
 
 ## [2026.02.2]
 

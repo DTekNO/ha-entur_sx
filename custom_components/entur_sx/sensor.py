@@ -870,7 +870,7 @@ class EnturSXSummarySensor(
 
         for line_ref in self.lines:
             line_data = self.coordinator.data.get(line_ref, [])
-            if not line_data or line_data[0].get("summary") == STATE_NORMAL:
+            if not line_data:
                 normal.append(line_ref)
                 continue
 
