@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from html.parser import HTMLParser
 import logging
 import os
@@ -14,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -756,12 +758,16 @@ class EnturSXSensor(
 
 
 class EnturSXSummarySensor(
-    CoordinatorEntity[EnturSXDataUpdateCoordinator], SensorEntity
+    CoordinatorEntity[EnturSXDataUpdateCoordinator], RestoreEntity, SensorEntity
 ):
     """Summary sensor with markdown-ready content for all monitored lines."""
 
     _attr_has_entity_name = True
-    _unrecorded_attributes = frozenset({"markdown_active", "markdown_planned"})
+    _unrecorded_attributes = frozenset({
+        "markdown_active", 
+        "markdown_planned",
+        "_tracked_disruption_ids"  # Internal tracking, don't record in DB
+    })
 
     def __init__(
         self,
@@ -784,6 +790,12 @@ class EnturSXSummarySensor(
         self._formatted_content_template = None
         if template_content:
             self._compile_template(template_content)
+        
+        # Track disruptions to detect new ones
+        self._previous_disruption_ids: set[str] = set()
+        self._new_disruptions_count: int = 0
+        self._new_disruptions: list[dict[str, Any]] = []
+        self._last_disruptions_changed: str | None = None
 
         device_name = entry.data.get(CONF_DEVICE_NAME, "Entur Disruption")
         config_data = {**entry.data, **entry.options}
@@ -822,6 +834,28 @@ class EnturSXSummarySensor(
             )
             self._formatted_content_template = None
 
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state to maintain disruption tracking across restarts."""
+        await super().async_added_to_hass()
+        
+        # Attempt to restore previous state
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.attributes:
+            # Restore previous disruption IDs to avoid marking everything as new
+            stored_ids = last_state.attributes.get("_tracked_disruption_ids", [])
+            if stored_ids:
+                self._previous_disruption_ids = set(stored_ids)
+                _LOGGER.debug(
+                    "Restored %d disruption IDs from previous state for %s",
+                    len(stored_ids),
+                    self._entry_id
+                )
+            
+            # Restore other tracking variables
+            self._last_disruptions_changed = last_state.attributes.get(
+                "last_disruptions_changed"
+            )
+
     @property
     def native_value(self) -> int:
         """Return simple state based on total disruption count (open + planned)."""
@@ -845,11 +879,32 @@ class EnturSXSummarySensor(
         # Return numeric state for easy filtering/automation
         return len(disrupted_lines)
 
+    def _generate_disruption_id(self, disruption: dict[str, Any], line_ref: str) -> str:
+        """Generate a unique ID for a disruption.
+        
+        Args:
+            disruption: The disruption dictionary
+            line_ref: The line reference
+            
+        Returns:
+            A unique hash string for the disruption
+        """
+        # Create a stable identifier from key fields
+        summary = disruption.get("summary", "")
+        valid_from = disruption.get("valid_from", "")
+        valid_to = disruption.get("valid_to", "")
+        status = disruption.get("status", "")
+        
+        # Combine fields and hash
+        identifier = f"{line_ref}|{summary}|{valid_from}|{valid_to}|{status}"
+        return hashlib.md5(identifier.encode()).hexdigest()
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes.
         
         Includes markdown_active and markdown_planned with TravelTag badges for each disrupted line.
+        Also tracks new disruptions since last update.
         """
         if not self.coordinator.data:
             no_planned = "Ingen planlagte avvik" if self._lang == "no" else "No planned disruptions"
@@ -860,6 +915,9 @@ class EnturSXSummarySensor(
                 "normal_lines": len(self.lines),
                 "markdown_active": STATE_NORMAL,
                 "markdown_planned": no_planned,
+                "new_disruptions_count": 0,
+                "new_disruptions": [],
+                "last_disruptions_changed": self._last_disruptions_changed,
             }
 
         active_lines = set()
@@ -867,6 +925,10 @@ class EnturSXSummarySensor(
         normal = []
         active_disruptions_list = []
         planned_disruptions_list = []
+        
+        # Track current disruption IDs to detect new ones
+        current_disruption_ids: set[str] = set()
+        current_disruptions_map: dict[str, dict[str, Any]] = {}
 
         for line_ref in self.lines:
             line_data = self.coordinator.data.get(line_ref, [])
@@ -936,6 +998,10 @@ class EnturSXSummarySensor(
                     except (ValueError, AttributeError):
                         pass
                 
+                # Generate unique ID for this disruption
+                disruption_id = self._generate_disruption_id(deviation, line_ref)
+                current_disruption_ids.add(disruption_id)
+                
                 # Build enriched disruption dict for template
                 disruption_dict = {
                     'line_name': line_display_name,
@@ -945,8 +1011,12 @@ class EnturSXSummarySensor(
                     'description': description,
                     'valid_from_formatted': valid_from_formatted,
                     'valid_to_formatted': valid_to_formatted,
-                    'status': status
+                    'status': status,
+                    'disruption_id': disruption_id,
                 }
+                
+                # Store in map for later comparison
+                current_disruptions_map[disruption_id] = disruption_dict
 
                 # Categorize by status
                 if status == STATUS_OPEN:
@@ -966,6 +1036,35 @@ class EnturSXSummarySensor(
             # If line has no non-expired deviations, mark as normal
             if not has_active and not has_planned:
                 normal.append(line_ref)
+
+        # Detect new disruptions by comparing with previous set
+        new_disruption_ids = current_disruption_ids - self._previous_disruption_ids
+        
+        # Update tracking variables
+        if new_disruption_ids:
+            # New disruptions detected
+            self._new_disruptions = [
+                current_disruptions_map[disruption_id]
+                for disruption_id in new_disruption_ids
+                if disruption_id in current_disruptions_map
+            ]
+            self._new_disruptions_count = len(self._new_disruptions)
+            self._last_disruptions_changed = datetime.now().isoformat()
+            
+            _LOGGER.info(
+                "Detected %d new disruption(s) for %s",
+                self._new_disruptions_count,
+                self._entry_id
+            )
+        elif current_disruption_ids != self._previous_disruption_ids:
+            # Disruptions changed (some removed), but no new ones added
+            # Reset new disruptions counter
+            self._new_disruptions = []
+            self._new_disruptions_count = 0
+            self._last_disruptions_changed = datetime.now().isoformat()
+        
+        # Update previous disruption IDs for next comparison
+        self._previous_disruption_ids = current_disruption_ids
 
         # Render markdown using template
         if not active_disruptions_list:
@@ -1029,4 +1128,8 @@ class EnturSXSummarySensor(
             "normal_line_refs": normal,
             "markdown_active": markdown_active,
             "markdown_planned": markdown_planned,
+            "new_disruptions_count": self._new_disruptions_count,
+            "new_disruptions": self._new_disruptions,
+            "last_disruptions_changed": self._last_disruptions_changed,
+            "_tracked_disruption_ids": list(current_disruption_ids),
         }
