@@ -316,14 +316,22 @@ class EnturSXApiClient:
             # Timeout must accommodate quota waits: 20 pages with potential 60s waits
             async with async_timeout.timeout(350):
                 while page_count < max_pages:
-                    # CRITICAL: Check quota and record request atomically under lock
-                    # This prevents race conditions where multiple requests bypass quota checks
-                    async with self._quota_manager._lock:
-                        internal_used = len(self._quota_manager.request_timestamps)
-                        can_proceed, reason = self._quota_manager.can_make_request()
-                        
-                        # If we can't proceed, wait for quota (lock will be released during await)
-                        if not can_proceed:
+                    # CRITICAL: Wait for quota outside lock, then record atomically
+                    # Lock must be released during sleep to prevent request queue buildup
+                    
+                    # Wait loop: Keep checking and sleeping until quota available
+                    while True:
+                        async with self._quota_manager._lock:
+                            internal_used = len(self._quota_manager.request_timestamps)
+                            can_proceed, reason = self._quota_manager.can_make_request()
+                            
+                            if can_proceed:
+                                # Quota available! Record this request atomically
+                                page_count += 1
+                                self._quota_manager.record_request(self._operator_code)
+                                break  # Exit wait loop, proceed to make request
+                            
+                            # No quota, calculate wait time
                             wait_time = self._quota_manager.get_seconds_until_quota_available()
                             _LOGGER.info(
                                 "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s. Waiting %.1f seconds.",
@@ -333,19 +341,14 @@ class EnturSXApiClient:
                                 internal_used,
                                 wait_time
                             )
-                            # Sleep releases the lock, then re-acquires on completion
-                            await asyncio.sleep(wait_time)
-                            # Re-check quota after wait
-                            can_proceed, reason = self._quota_manager.can_make_request()
-                            _LOGGER.info(
-                                "[%s] Quota restored, resuming for page %d",
-                                self._operator_code or "ALL",
-                                page_count + 1
-                            )
                         
-                        # Record this request BEFORE making it (still under lock for atomicity)
-                        page_count += 1
-                        self._quota_manager.record_request(self._operator_code)
+                        # Sleep OUTSIDE the lock so other tasks can check/use quota
+                        await asyncio.sleep(wait_time)
+                        _LOGGER.debug(
+                            "[%s] Quota wait complete, re-checking availability for page %d",
+                            self._operator_code or "ALL",
+                            page_count + 1
+                        )
                     
                     # Add requestorId parameter for pagination
                     url = f"{self._service_url}&requestorId={requestor_id}" if "?" in self._service_url else f"{self._service_url}?requestorId={requestor_id}"
