@@ -107,16 +107,31 @@ class GlobalQuotaManager:
         Returns:
             Seconds to wait, or 0 if quota currently available
         """
-        if self.get_internal_quota_available() > 0:
-            return 0.0
+        # Calculate internal quota wait time
+        internal_wait = 0.0
+        if self.get_internal_quota_available() <= 0:
+            # We're at internal limit. Calculate when oldest request will expire
+            now = time.time()
+            oldest_request = self.request_timestamps[0]
+            time_until_expiry = self.window_seconds - (now - oldest_request)
+            # Add 0.5 second safety margin
+            internal_wait = max(0, time_until_expiry + 0.5)
         
-        # We're at limit. Calculate when oldest request will expire from window
-        now = time.time()
-        oldest_request = self.request_timestamps[0]
-        time_until_expiry = self.window_seconds - (now - oldest_request)
+        # Calculate API header quota wait time
+        api_wait = 0.0
+        if self.available is not None and self.available <= 0:
+            # API says no quota. Check if we have expiry time
+            if self.expiry_datetime:
+                now_utc = datetime.now(timezone.utc)
+                time_until_expiry = (self.expiry_datetime - now_utc).total_seconds()
+                # Add 1 second safety margin for API quota
+                api_wait = max(0, time_until_expiry + 1.0)
+            else:
+                # No expiry time available, use conservative 10 second wait
+                api_wait = 10.0
         
-        # Add 0.5 second safety margin
-        return max(0, time_until_expiry + 0.5)
+        # Return the maximum wait time needed
+        return max(internal_wait, api_wait)
     
     def can_make_request(self) -> tuple[bool, str]:
         """Check if we can make a request based on both internal and API quotas.
@@ -141,7 +156,7 @@ class GlobalQuotaManager:
         wait_time = self.get_seconds_until_quota_available()
         
         if wait_time > 0:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "[GLOBAL QUOTA] %d/4 internal quota used. Waiting %.1f seconds for quota restoration.",
                 len(self.request_timestamps),
                 wait_time
@@ -158,8 +173,8 @@ class GlobalQuotaManager:
         used = len(self.request_timestamps)
         available = self.max_requests_per_window - used
         
-        # Use INFO level so users can see quota manager working
-        _LOGGER.info(
+        # Use DEBUG level for quota tracking
+        _LOGGER.debug(
             "[GLOBAL QUOTA] Request completed for %s. Quota: %d/4 used, %d remaining",
             operator or "unknown",
             used,
@@ -333,7 +348,7 @@ class EnturSXApiClient:
                             
                             # No quota, calculate wait time
                             wait_time = self._quota_manager.get_seconds_until_quota_available()
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s. Waiting %.1f seconds.",
                                 self._operator_code or "ALL",
                                 page_count + 1,
