@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.03.1]
+
+### Fixed
+- **🕐 Timezone Handling**: Fixed "can't subtract offset-naive and offset-aware datetimes" error
+  - Properly normalize rate limit expiry times to UTC timezone
+  - Ensure all datetime comparisons use timezone-aware datetimes
+  - Prevents recurring errors when calculating quota wait times
+  - Fixed timestamp calculations to use UTC-aware datetime objects
+
 ## [2026.02.4]
 
 ### Changed

@@ -66,7 +66,14 @@ class GlobalQuotaManager:
             self.expiry_time = headers["rate-limit-expiry-time"]
             # Parse the expiry time to datetime for calculations
             try:
-                self.expiry_datetime = parsedate_to_datetime(self.expiry_time)
+                parsed_dt = parsedate_to_datetime(self.expiry_time)
+                # Ensure the datetime is timezone-aware and normalized to UTC
+                if parsed_dt.tzinfo is None:
+                    # If naive, assume UTC
+                    self.expiry_datetime = parsed_dt.replace(tzinfo=timezone.utc)
+                else:
+                    # Convert to UTC to ensure consistent timezone handling
+                    self.expiry_datetime = parsed_dt.astimezone(timezone.utc)
             except Exception as err:
                 _LOGGER.debug("Could not parse expiry time '%s': %s", self.expiry_time, err)
                 self.expiry_datetime = None
@@ -498,7 +505,7 @@ class EnturSXApiClient:
             Dict mapping line reference to list of situations with status
         """
         allitems_dict = {}
-        now_timestamp = datetime.now().timestamp()
+        now_timestamp = datetime.now(timezone.utc).timestamp()
 
         for look_for in self._lines:
             items = []
