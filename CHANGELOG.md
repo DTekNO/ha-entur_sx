@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **⚡ Quota manager rewrite**: Replaced local rolling-window counter with server-authoritative tracking
+  - `available` quota is now sourced directly from `rate-limit-available` response headers
+  - After each request, `available` is decremented locally to predict the next call — corrected by the server on every response
+  - Removed the separate 4-requests-per-60s deque; single source of truth eliminates double-counting
+  - Spike-arrest (≥100 ms between requests) and back-off (sleep until `rate-limit-expiry-time` when quota hits 0) are the only two rules
+  - `rate-limit-range` header is parsed to calibrate the fallback window duration (`per-minute` → 60 s, etc.)
+  - DEBUG log shows predicted quota transition (`5 → 4/5`) on every request for easy tracing
+- **🔄 Pagination quota awareness**: Pagination loop respects the same quota rules — will back off until expiry mid-pagination rather than burning remaining quota and hitting a 429
+- **📈 Poll interval**: Increased from 60 s to 120 s — being an exact multiple of the 60 s server window, every request lands in its own fresh window, giving a consistent `4/5` remaining and eliminating boundary-straddling effects seen at non-multiple intervals
+
 ## [2026.03.1]
 
 ### Fixed

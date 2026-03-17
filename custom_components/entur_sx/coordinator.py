@@ -29,6 +29,9 @@ _DISRUPTION_LOGGER = logging.getLogger(f"{__name__}.disruptions")
 class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching Entur SX data."""
 
+    # Class-level counter so each coordinator gets a unique ID for log tracing
+    _instance_counter: int = 0
+
     def __init__(self, hass: HomeAssistant, api: EnturSXApiClient) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -41,6 +44,16 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Set the session for the API client
         session = async_get_clientsession(hass)
         self.api.set_session(session)
+
+        # Unique ID for log tracing (helps detect accidental duplicate coordinators)
+        EnturSXDataUpdateCoordinator._instance_counter += 1
+        self._coordinator_id = EnturSXDataUpdateCoordinator._instance_counter
+        _LOGGER.info(
+            "[Coordinator #%d] Created for operator=%s (total ever created: %d)",
+            self._coordinator_id,
+            api._operator or "ALL",
+            self._coordinator_id,
+        )
         
         # Track active disruptions to detect changes
         self._previous_disruptions: dict[str, set[str]] = {}
@@ -61,7 +74,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data = await self.api.async_get_deviations()
             request_end = datetime.now()
             duration_ms = (request_end - request_start).total_seconds() * 1000
-            
+
             # Log successful request in history
             self._request_history.append({
                 "timestamp": request_start.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
@@ -69,6 +82,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "status": "success",
                 "lines_count": len(data),
                 "provider": self.api._operator or "ALL",
+                "coordinator_id": self._coordinator_id,
             })
             
             _LOGGER.debug("Fetched data for %d lines", len(data))
@@ -114,6 +128,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "status": f"error_{err.status}",
                 "error": str(err.message) if hasattr(err, 'message') else str(err),
                 "provider": self.api._operator or "ALL",
+                "coordinator_id": self._coordinator_id,
             })
             
             if err.status == 429:
@@ -151,21 +166,23 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Dump request history to help diagnose what led to throttling
         if self._request_history:
             _LOGGER.warning(
-                "Request history (last %d requests leading to throttle):",
+                "[Coordinator #%d] Request history (last %d requests leading to throttle):",
+                self._coordinator_id,
                 len(self._request_history),
             )
             for i, req in enumerate(self._request_history, 1):
                 _LOGGER.warning(
-                    "  #%d: %s | provider=%s | status=%s | duration=%sms%s",
+                    "  #%d: %s | coordinator=#%s | provider=%s | status=%s | duration=%sms%s",
                     i,
                     req.get("timestamp", "unknown"),
+                    req.get("coordinator_id", "?"),
                     req.get("provider", "?"),
                     req.get("status", "unknown"),
                     req.get("duration_ms", "?"),
                     f" | lines={req['lines_count']}" if "lines_count" in req else f" | error={req.get('error', 'unknown')}",
                 )
         else:
-            _LOGGER.warning("No request history available (first request?)")
+            _LOGGER.warning("[Coordinator #%d] No request history available (first request?)", self._coordinator_id)
         
         # Adjust update interval for back-off period
         self.update_interval = timedelta(seconds=backoff_time)

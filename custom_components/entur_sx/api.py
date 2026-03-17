@@ -5,7 +5,6 @@ import asyncio
 import logging
 import time
 import uuid
-from collections import deque
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 from email.utils import parsedate_to_datetime
@@ -26,29 +25,32 @@ QUOTA_MANAGER_KEY = "entur_sx_quota_manager"
 
 class GlobalQuotaManager:
     """Centralized quota manager shared across all API clients.
-    
-    Singleton that enforces 4 requests per 60-second rolling window globally
-    across all config entries, coordinators, and config flow requests.
+
+    Tracks the server-reported rate-limit headers and predicts remaining quota
+    locally (by decrementing after each call) so we never need a separate
+    rolling-window counter.  The server's authoritative values are refreshed
+    on every successful response via update_from_headers().
     """
     
     def __init__(self):
         """Initialize global quota manager."""
-        # API header tracking (for respecting server-side limits)
+        # Server-reported quota (updated on every response, decremented locally after each call)
         self.allowed: int | None = None
         self.available: int | None = None
         self.used: int | None = None
         self.expiry_time: str | None = None
         self.expiry_datetime: datetime | None = None
-        
-        # Rolling window tracking (our internal quota: 4 requests per 60 seconds)
-        self.request_timestamps: deque = deque(maxlen=4)  # Last 4 request times
-        self.window_seconds: float = 60.0  # Rolling window duration
-        self.max_requests_per_window: int = 4  # Maximum requests in window
-        
+        self.range: str | None = None  # e.g. "per-minute"
+        self.window_seconds: float = 60.0  # Calibrated from rate-limit-range header
+
+        # Spike-arrest: track time of last request (100 ms minimum between calls)
+        self._last_request_time: float = 0.0
+        self.min_request_interval: float = 0.1
+
         # Lock to prevent race conditions across async requests
         self._lock = asyncio.Lock()
-        
-        _LOGGER.info("Global Entur API quota manager initialized (4 req/60s limit)")
+
+        _LOGGER.info("Global Entur API quota manager initialized")
     
     def update_from_headers(self, headers: dict) -> None:
         """Update rate limit info from response headers.
@@ -59,7 +61,15 @@ class GlobalQuotaManager:
         if "rate-limit-allowed" in headers:
             self.allowed = int(headers["rate-limit-allowed"])
         if "rate-limit-available" in headers:
-            self.available = int(headers["rate-limit-available"])
+            server_available = int(headers["rate-limit-available"])
+            if self.available is not None and server_available != self.available:
+                _LOGGER.debug(
+                    "[GLOBAL QUOTA] Server corrected quota: %s → %s/%s",
+                    self.available,
+                    server_available,
+                    self.allowed,
+                )
+            self.available = server_available
         if "rate-limit-used" in headers:
             self.used = int(headers["rate-limit-used"])
         if "rate-limit-expiry-time" in headers:
@@ -77,126 +87,163 @@ class GlobalQuotaManager:
             except Exception as err:
                 _LOGGER.debug("Could not parse expiry time '%s': %s", self.expiry_time, err)
                 self.expiry_datetime = None
+        if "rate-limit-range" in headers:
+            raw_range = headers["rate-limit-range"].strip('"')
+            if raw_range != self.range:
+                _LOGGER.info("API rate limit window reported by server: %s", raw_range)
+            self.range = raw_range
+            # Calibrate our internal rolling window to match the server's window.
+            # "per-minute" → 60s, "per-second" → 1s, "per-hour" → 3600s, etc.
+            range_map = {
+                "per-minute": 60.0,
+                "per-second": 1.0,
+                "per-hour": 3600.0,
+            }
+            if raw_range in range_map:
+                self.window_seconds = range_map[raw_range]
+        _LOGGER.debug(
+                    "[GLOBAL QUOTA] Used quota: %s, remaining %s/%s (expires at %s)%s",
+                    self.used,
+                    server_available,
+                    self.allowed,
+                    self.expiry_datetime.isoformat() if self.expiry_datetime else "unknown",
+                    f" [{self.range}]" if self.range else "",
+                )
         
         # Log rate limit info for monitoring
         if self.available is not None and self.allowed is not None:
+            range_label = f" [{self.range}]" if self.range else ""
             if self.available <= 1:
                 _LOGGER.warning(
-                    "API rate limit headers show low quota: %d/%d requests remaining until %s",
+                    "API rate limit headers show low quota: %d/%d requests remaining until %s%s",
                     self.available,
                     self.allowed,
-                    self.expiry_time or "unknown"
+                    self.expiry_time or "unknown",
+                    range_label,
                 )
             elif self.available <= 2:
                 _LOGGER.info(
-                    "API rate limit headers: %d/%d requests remaining until %s",
+                    "API rate limit headers: %d/%d requests remaining until %s%s",
                     self.available,
                     self.allowed,
-                    self.expiry_time or "unknown"
+                    self.expiry_time or "unknown",
+                    range_label,
                 )
+            _LOGGER.debug(
+                "API rate limit headers: %d/%d requests remaining until %s%s",
+                self.available,
+                self.allowed,
+                self.expiry_time or "unknown",
+                range_label,
+            )
     
-    def get_internal_quota_available(self) -> int:
-        """Get number of requests available in our internal rolling window.
-        
-        Returns:
-            Number of requests we can make without exceeding 4 per 60 seconds
-        """
-        now = time.time()
-        # Remove timestamps older than 60 seconds
-        while self.request_timestamps and (now - self.request_timestamps[0]) > self.window_seconds:
-            self.request_timestamps.popleft()
-        
-        return self.max_requests_per_window - len(self.request_timestamps)
-    
+
     def get_seconds_until_quota_available(self) -> float:
-        """Calculate seconds until at least 1 request quota is available.
-        
+        """Calculate seconds to wait before the next request can be made.
+
+        Two rules:
+        - Spike-arrest: minimum 100 ms between requests.
+        - Quota exhausted: back off until server expiry time (+1 s margin).
+
         Returns:
-            Seconds to wait, or 0 if quota currently available
+            Seconds to wait, or 0.0 if a request can go immediately.
         """
-        # Calculate internal quota wait time
-        internal_wait = 0.0
-        if self.get_internal_quota_available() <= 0:
-            # We're at internal limit. Calculate when oldest request will expire
-            now = time.time()
-            oldest_request = self.request_timestamps[0]
-            time_until_expiry = self.window_seconds - (now - oldest_request)
-            # Add 0.5 second safety margin
-            internal_wait = max(0, time_until_expiry + 0.5)
-        
-        # Calculate API header quota wait time
-        api_wait = 0.0
+        # Spike-arrest
+        spike_wait = 0.0
+        if self._last_request_time > 0:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < self.min_request_interval:
+                spike_wait = self.min_request_interval - elapsed
+
+        # Quota exhausted: wait until server window expires
+        quota_wait = 0.0
         if self.available is not None and self.available <= 0:
-            # API says no quota. Check if we have expiry time
             if self.expiry_datetime:
-                now_utc = datetime.now(timezone.utc)
-                time_until_expiry = (self.expiry_datetime - now_utc).total_seconds()
-                # Add 1 second safety margin for API quota
-                api_wait = max(0, time_until_expiry + 1.0)
+                seconds = (self.expiry_datetime - datetime.now(timezone.utc)).total_seconds()
+                quota_wait = max(0.0, seconds + 1.0)
             else:
-                # No expiry time available, use conservative 10 second wait
-                api_wait = 10.0
-        
-        # Return the maximum wait time needed
-        return max(internal_wait, api_wait)
+                quota_wait = self.window_seconds + 1.0
+
+        return max(spike_wait, quota_wait)
     
     def can_make_request(self) -> tuple[bool, str]:
-        """Check if we can make a request based on both internal and API quotas.
-        
+        """Check if a request can be made right now.
+
+        Two rules:
+        - Spike-arrest: reject if last request was less than 100 ms ago.
+        - Quota: block if server-reported (or predicted) available is 0,
+          unless the expiry time has already passed.
+
         Returns:
             Tuple of (can_proceed, reason_if_not)
         """
-        # Check internal rolling window quota
-        internal_available = self.get_internal_quota_available()
-        if internal_available <= 0:
-            wait_time = self.get_seconds_until_quota_available()
-            return False, f"internal quota exhausted (4 req/60s limit), wait {wait_time:.1f}s"
-        
-        # Check API header quota (if available)
+        # Rule 1: spike-arrest
+        time_since_last = self.get_time_since_last_request()
+        if time_since_last < self.min_request_interval:
+            wait_ms = (self.min_request_interval - time_since_last) * 1000
+            return False, f"spike arrest: last request {time_since_last*1000:.0f}ms ago, wait {wait_ms:.0f}ms"
+
+        # Rule 2: quota exhausted — only block while the server window is still active
         if self.available is not None and self.available <= 0:
-            return False, f"API header shows no quota ({self.available}/{self.allowed})"
-        
+            if self.expiry_datetime is None or datetime.now(timezone.utc) < self.expiry_datetime:
+                wait_time = self.get_seconds_until_quota_available()
+                return False, f"quota exhausted ({self.available}/{self.allowed}), wait {wait_time:.1f}s"
+
         return True, ""
     
     async def wait_for_quota(self) -> None:
         """Wait until request quota is available."""
         wait_time = self.get_seconds_until_quota_available()
-        
+
         if wait_time > 0:
             _LOGGER.debug(
-                "[GLOBAL QUOTA] %d/4 internal quota used. Waiting %.1f seconds for quota restoration.",
-                len(self.request_timestamps),
-                wait_time
+                "[GLOBAL QUOTA] Quota: %s/%s remaining. Waiting %.1f seconds for restoration.",
+                self.available,
+                self.allowed,
+                wait_time,
             )
             await asyncio.sleep(wait_time)
     
     def record_request(self, operator: str | None = None) -> None:
-        """Record that a request was made (for rolling window tracking).
-        
+        """Record that a request was made.
+
+        Updates spike-arrest timer and decrements our local copy of
+        server-reported available quota by 1.  The server will confirm the
+        exact value on the next successful response via update_from_headers().
+
         Args:
             operator: Optional operator/provider for logging
         """
-        self.request_timestamps.append(time.time())
-        used = len(self.request_timestamps)
-        available = self.max_requests_per_window - used
-        
-        # Use DEBUG level for quota tracking
+        self._last_request_time = time.time()
+
+        # If the server window has expired since our last request, the server will
+        # have reset its counter to `allowed`. Reset our local copy to match before
+        # decrementing, so our prediction stays accurate.
+        if (self.expiry_datetime is not None and self.allowed is not None
+                and datetime.now(timezone.utc) > self.expiry_datetime):
+            self.available = self.allowed
+
+        before = self.available
+        if self.available is not None:
+            self.available = max(0, self.available - 1)
+
         _LOGGER.debug(
-            "[GLOBAL QUOTA] Request completed for %s. Quota: %d/4 used, %d remaining",
+            "[GLOBAL QUOTA] Request recorded for %s. Quota: %s → %s/%s (predicted)",
             operator or "unknown",
-            used,
-            available
+            before if before is not None else "?",
+            self.available if self.available is not None else "?",
+            self.allowed if self.allowed is not None else "?",
         )
     
     def get_time_since_last_request(self) -> float:
         """Get seconds since last request.
-        
+
         Returns:
             Seconds elapsed since last request, or infinity if no previous request
         """
-        if not self.request_timestamps:
+        if self._last_request_time == 0.0:
             return float('inf')
-        return time.time() - self.request_timestamps[-1]
+        return time.time() - self._last_request_time
 
 
 def get_quota_manager(hass: HomeAssistant) -> GlobalQuotaManager:
@@ -220,7 +267,6 @@ class EnturSXApiClient:
         self,
         hass: HomeAssistant,
         operator: str | None = None,
-        lines: list[str] | None = None,
         lang: str = "no",
     ) -> None:
         """Initialize the API client.
@@ -228,12 +274,10 @@ class EnturSXApiClient:
         Args:
             hass: Home Assistant instance
             operator: Codespace (e.g., "SKY", "SOF")
-            lines: List of line IDs to monitor
             lang: Preferred language code ("no" or "en")
         """
         self._hass = hass
         self._operator = operator
-        self._lines = lines or []
         self._lang = lang
         self._session: aiohttp.ClientSession | None = None
         
@@ -325,8 +369,11 @@ class EnturSXApiClient:
             _LOGGER.error("Session not set")
             return {}
 
-        headers = {"Content-Type": "application/json"}
-        
+        headers = {
+            "Content-Type": "application/json",
+            "ET-Client-Name": "homeassistant-entur-sx",
+        }
+
         # Generate requestorId for pagination tracking
         requestor_id = str(uuid.uuid4())
         all_situations = []
@@ -335,8 +382,8 @@ class EnturSXApiClient:
         data = None  # Initialize to handle early breaks
 
         try:
-            # Timeout must accommodate quota waits: 20 pages with potential 60s waits
-            async with async_timeout.timeout(350):
+            # Timeout: one quota-wait cycle (≤60s) + page requests. 90s is sufficient.
+            async with async_timeout.timeout(90):
                 while page_count < max_pages:
                     # CRITICAL: Wait for quota outside lock, then record atomically
                     # Lock must be released during sleep to prevent request queue buildup
@@ -344,24 +391,47 @@ class EnturSXApiClient:
                     # Wait loop: Keep checking and sleeping until quota available
                     while True:
                         async with self._quota_manager._lock:
-                            internal_used = len(self._quota_manager.request_timestamps)
                             can_proceed, reason = self._quota_manager.can_make_request()
-                            
+
                             if can_proceed:
+                                # Capture time-since-last BEFORE recording this request
+                                # so the value is meaningful (gap from previous, not self)
+                                time_since_prev = self._quota_manager.get_time_since_last_request()
+                                # Capture pre-decrement available for error reporting
+                                available_before = self._quota_manager.available
                                 # Quota available! Record this request atomically
                                 page_count += 1
                                 self._quota_manager.record_request(self._operator_code)
                                 break  # Exit wait loop, proceed to make request
-                            
+
                             # No quota, calculate wait time
                             wait_time = self._quota_manager.get_seconds_until_quota_available()
+
+                            if page_count == 0:
+                                # First page - no data yet. Don't sleep here: a long
+                                # asyncio.sleep during async_config_entry_first_refresh can
+                                # be cancelled by HA, producing CancelledError and marking
+                                # the entry as cancelled. Fail fast instead so the
+                                # coordinator returns cached data and HA retries on schedule.
+                                _LOGGER.debug(
+                                    "[%s] Quota exhausted before first request (%s, %.1fs wait). "
+                                    "Failing fast - coordinator will retry on next interval.",
+                                    self._operator_code or "ALL",
+                                    reason,
+                                    wait_time,
+                                )
+                                raise RuntimeError(
+                                    f"API quota exhausted, retry in {wait_time:.0f}s"
+                                )
+
                             _LOGGER.debug(
-                                "[%s] Rate limit before page %d: %s. Internal tracker: %d/4 requests in last 60s. Waiting %.1f seconds.",
+                                "[%s] Rate limit before page %d: %s. API quota: %s/%s remaining. Waiting %.1f seconds.",
                                 self._operator_code or "ALL",
                                 page_count + 1,
                                 reason,
-                                internal_used,
-                                wait_time
+                                self._quota_manager.available,
+                                self._quota_manager.allowed,
+                                wait_time,
                             )
                         
                         # Sleep OUTSIDE the lock so other tasks can check/use quota
@@ -378,15 +448,24 @@ class EnturSXApiClient:
                     async with self._session.get(url, headers=headers) as response:
                         # Check for 429 rate limit errors
                         if response.status == 429:
+                            # Update quota manager FIRST so expiry_datetime is recorded.
+                            # Per Entur policy: do NOT retry until Rate-Limit-Expiry-Time.
+                            # Recording the headers here ensures can_make_request() will
+                            # block the next coordinator cycle until the window resets.
+                            self._quota_manager.update_from_headers(response.headers)
                             _LOGGER.error(
                                 "⚠️  RATE LIMIT ERROR (429) - API rejected request for %s. "
-                                "Page %d of pagination. Time since last request: %.1fs. "
+                                "Page %d of pagination. Time since previous request: %.1fs. "
+                                "API quota before call: %s/%s remaining. "
+                                "Will not retry until expiry: %s. "
                                 "Global quota manager should have prevented this - please report!",
                                 self._operator_code or "ALL",
                                 page_count,
-                                self._quota_manager.get_time_since_last_request()
+                                time_since_prev,
+                                available_before,
+                                self._quota_manager.allowed,
+                                self._quota_manager.expiry_time or "unknown",
                             )
-                            # Log headers for debugging
                             if "retry-after" in response.headers:
                                 _LOGGER.error("  Retry-After header: %s", response.headers["retry-after"])
                             response.raise_for_status()
@@ -433,18 +512,15 @@ class EnturSXApiClient:
                         more_data = service_delivery.get("MoreData", False)
                         
                         if more_data:
-                            internal_remaining = self._quota_manager.get_internal_quota_available()
-                            api_quota_str = f", API: {self._quota_manager.available}/{self._quota_manager.allowed}" if self._quota_manager.available is not None else ""
-                            
+                            quota_str = f" API quota: {self._quota_manager.available}/{self._quota_manager.allowed}" if self._quota_manager.available is not None else ""
+
                             _LOGGER.info(
-                                "[%s] MoreData=true, continuing pagination. Page %d: %d situations (total: %d). "
-                                "Quota: %d/4 internal%s",
+                                "[%s] MoreData=true, continuing pagination. Page %d: %d situations (total: %d).%s",
                                 self._operator_code or "ALL",
                                 page_count,
                                 len(situations),
                                 len(all_situations),
-                                internal_remaining,
-                                api_quota_str
+                                quota_str,
                             )
                             # Continue loop to fetch next page with same requestorId
                         else:
@@ -497,131 +573,117 @@ class EnturSXApiClient:
 
     def _parse_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Parse the Entur API response.
-        
+
+        Processes ALL situations for the operator in a single pass and returns
+        every affected line found. Sensors each filter by their own line_ref,
+        so no per-line API requests are needed regardless of how many config
+        entries share this operator.
+
         Args:
             data: JSON response from Entur API
-            
+
         Returns:
-            Dict mapping line reference to list of situations with status
+            Dict mapping ALL found line references to their list of situations
         """
-        allitems_dict = {}
+        allitems_dict: dict[str, list[dict[str, Any]]] = {}
         now_timestamp = datetime.now(timezone.utc).timestamp()
 
-        for look_for in self._lines:
-            items = []
+        try:
+            siri = data.get("Siri", {})
+            service_delivery = siri.get("ServiceDelivery", {})
+            sx_delivery = service_delivery.get("SituationExchangeDelivery", [])
 
-            try:
-                siri = data.get("Siri", {})
-                service_delivery = siri.get("ServiceDelivery", {})
-                sx_delivery = service_delivery.get("SituationExchangeDelivery", [])
+            for sed in sx_delivery:
+                situations = sed.get("Situations", {})
+                elements = situations.get("PtSituationElement", [])
 
-                for sed in sx_delivery:
-                    situations = sed.get("Situations", {})
-                    elements = situations.get("PtSituationElement", [])
+                for element in elements:
+                    progress = element.get("Progress", "")
+                    progress_lower = progress.lower()
 
-                    for element in elements:
-                        progress = element.get("Progress", "")
-                        
-                        # Lowercase comparison for progress (API sometimes returns lowercase)
-                        progress_lower = progress.lower()
+                    affects = element.get("Affects", {})
+                    networks = affects.get("Networks")
 
-                        affects = element.get("Affects", {})
-                        networks = affects.get("Networks")
+                    if not networks:
+                        continue
 
-                        if not networks:
-                            continue
+                    # Get validity period
+                    validity_periods = element.get("ValidityPeriod", [])
+                    if not validity_periods:
+                        continue
 
-                        # Get validity period
-                        validity_periods = element.get("ValidityPeriod", [])
-                        if not validity_periods:
-                            continue
+                    validity_period = validity_periods[0]
+                    start_time = validity_period.get("StartTime")
+                    end_time = validity_period.get("EndTime")
 
-                        validity_period = validity_periods[0]
-                        start_time = validity_period.get("StartTime")
-                        end_time = validity_period.get("EndTime")
-                        
-                        if not start_time:
-                            continue
+                    if not start_time:
+                        continue
 
-                        # Determine status based on time and Progress field
-                        start_timestamp = datetime.fromisoformat(start_time).timestamp()
-                        
-                        # Determine status primarily based on time validity
-                        if now_timestamp < start_timestamp:
-                            # Future event - always planned regardless of progress
-                            status = STATUS_PLANNED
-                        elif end_time:
-                            end_timestamp = datetime.fromisoformat(end_time).timestamp()
-                            if now_timestamp > end_timestamp:
-                                # Past the end time - expired
-                                status = STATUS_EXPIRED
-                            else:
-                                # Currently active
-                                # Check Progress field - if closed, it's been resolved
-                                if progress_lower == "closed":
-                                    status = STATUS_EXPIRED
-                                else:
-                                    status = STATUS_OPEN
+                    # Determine status based on time and Progress field
+                    start_timestamp = datetime.fromisoformat(start_time).timestamp()
+
+                    if now_timestamp < start_timestamp:
+                        status = STATUS_PLANNED
+                    elif end_time:
+                        end_timestamp = datetime.fromisoformat(end_time).timestamp()
+                        if now_timestamp > end_timestamp:
+                            status = STATUS_EXPIRED
                         else:
-                            # No end time specified
-                            # Check Progress field - if closed, treat as expired
-                            if progress_lower == "closed":
-                                status = STATUS_EXPIRED
-                            else:
-                                # No end time and not closed - consider it open if started
-                                status = STATUS_OPEN
+                            status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
+                    else:
+                        status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
 
-                        # Check if this situation affects our line
-                        affected_networks = networks.get("AffectedNetwork", [])
-                        for an in affected_networks:
-                            affected_lines = an.get("AffectedLine", [])
-                            if not affected_lines:
+                    # Extract text once per situation (not per line)
+                    summaries = element.get("Summary", [])
+                    descriptions = element.get("Description", [])
+                    if not isinstance(summaries, list):
+                        summaries = [summaries] if summaries else []
+                    if not isinstance(descriptions, list):
+                        descriptions = [descriptions] if descriptions else []
+
+                    summary = self._select_text_by_language(summaries) or STATE_NORMAL
+                    description = self._select_text_by_language(descriptions) or STATE_NORMAL
+
+                    situation_entry = {
+                        "valid_from": start_time,
+                        "valid_to": end_time,
+                        "summary": summary,
+                        "description": description,
+                        "status": status,
+                        "progress": progress_lower,
+                    }
+
+                    # Add this situation to every line it affects
+                    affected_networks = networks.get("AffectedNetwork", [])
+                    for an in affected_networks:
+                        affected_lines = an.get("AffectedLine", [])
+                        if not affected_lines:
+                            continue
+
+                        for affected_line in affected_lines:
+                            line_ref_obj = affected_line.get("LineRef", {})
+                            line_ref = line_ref_obj.get("value")
+
+                            if not line_ref:
                                 continue
 
-                            # Check ALL affected lines, not just the first one
-                            for affected_line in affected_lines:
-                                line_ref_obj = affected_line.get("LineRef", {})
-                                line_ref = line_ref_obj.get("value")
+                            if line_ref not in allitems_dict:
+                                allitems_dict[line_ref] = []
+                            allitems_dict[line_ref].append(situation_entry)
 
-                                if look_for == line_ref:
-                                    # Extract summary and description with language selection
-                                    summaries = element.get("Summary", [])
-                                    descriptions = element.get("Description", [])
-                                    
-                                    # Ensure they are lists
-                                    if not isinstance(summaries, list):
-                                        summaries = [summaries] if summaries else []
-                                    if not isinstance(descriptions, list):
-                                        descriptions = [descriptions] if descriptions else []
+        except Exception as err:
+            _LOGGER.error("Error parsing API response: %s", err, exc_info=True)
 
-                                    summary = self._select_text_by_language(summaries) or STATE_NORMAL
-                                    description = self._select_text_by_language(descriptions) or STATE_NORMAL
-
-                                    items.append({
-                                        "valid_from": start_time,
-                                        "valid_to": end_time,
-                                        "summary": summary,
-                                        "description": description,
-                                        "status": status,
-                                        "progress": progress.lower(),  # Normalize to lowercase
-                                    })
-                                    # Don't break - a situation might affect the same line multiple times
-                                    # (though unlikely, we should handle it)
-
-                # Sort by relevance: OPEN first, then PLANNED, then EXPIRED
-                # Within each status group, sort by start time (most recent first)
-                if items:
-                    status_priority = {STATUS_OPEN: 0, STATUS_PLANNED: 1, STATUS_EXPIRED: 2}
-                    items.sort(key=lambda x: (status_priority.get(x["status"], 3), -datetime.fromisoformat(x["valid_from"]).timestamp()))
-                # If no situations for this line, leave items as empty list
-                # The sensor layer will display "Normal service" for empty lists
-
-                allitems_dict[look_for] = items
-
-            except Exception as err:
-                _LOGGER.error("Error parsing data for line %s: %s", look_for, err, exc_info=True)
-                # Return empty list on error - sensor will show "Normal service"
-                allitems_dict[look_for] = []
+        # Sort each line: OPEN first, then PLANNED, then EXPIRED; newest first within group
+        status_priority = {STATUS_OPEN: 0, STATUS_PLANNED: 1, STATUS_EXPIRED: 2}
+        for line_ref, items in allitems_dict.items():
+            if items:
+                items.sort(
+                    key=lambda x: (
+                        status_priority.get(x["status"], 3),
+                        -datetime.fromisoformat(x["valid_from"]).timestamp(),
+                    )
+                )
 
         _LOGGER.debug("Parsed deviations for %d lines", len(allitems_dict))
         return allitems_dict

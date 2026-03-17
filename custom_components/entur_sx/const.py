@@ -14,7 +14,7 @@ DEFAULT_DEVICE_NAME = "Entur Disruption"  # Fallback only, translations preferre
 DEFAULT_CREATE_SUMMARY_SENSORS = True
 DEFAULT_SUMMARY_ICON = "mdi:bus-alert"
 DEFAULT_LANG = "en"  # Default to English if HA language cannot be determined
-UPDATE_INTERVAL = 30  # seconds - Global quota manager enforces 4 req/min limit; this interval ensures fresh data while staying within quota
+UPDATE_INTERVAL = 120  # seconds - exact 2× the 60s server window; ensures every request lands in its own fresh window
 
 
 def normalize_language(language_code: str | None) -> str:

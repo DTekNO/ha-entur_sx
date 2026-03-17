@@ -47,14 +47,13 @@ async def test_new_codespace_api():
         print("TEST 3: Initialize API client with codespace")
         print('=' * 100)
         
-        client = EnturSXApiClient(operator="SKY", lines=["SKY:Line:1", "SKY:Line:2"])
+        client = EnturSXApiClient(operator="SKY")
         client.set_session(session)
         
         print(f"\nClient initialized:")
         print(f"  Operator: {client._operator}")
         print(f"  Operator code: {client._operator_code}")
         print(f"  Service URL: {client._service_url}")
-        print(f"  Lines: {client._lines}")
         
         print(f"\n✅ Expected URL: https://api.entur.io/realtime/v1/rest/sx?datasetId=SKY")
         print(f"✅ Actual URL:   {client._service_url}")

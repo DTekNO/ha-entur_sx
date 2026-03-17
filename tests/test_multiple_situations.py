@@ -43,8 +43,7 @@ async def test_multiple_situations():
     async with aiohttp.ClientSession() as session:
         # Create API client for SKY operator with line 925
         api_client = EnturSXApiClient(
-            operator="SKY:Authority:SKY",
-            lines=["SKY:Line:925"]
+            operator="SKY:Authority:SKY"
         )
         api_client.set_session(session)
         

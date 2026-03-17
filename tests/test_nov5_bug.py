@@ -126,7 +126,7 @@ async def test_nov5_skyss_line1_bug():
     }
 
     # Create client
-    client = EnturSXApiClient(operator="SKY", lines=["SKY:Line:1"])
+    client = EnturSXApiClient(operator="SKY")
 
     # Mock session
     mock_session = MagicMock()
