@@ -14,6 +14,8 @@ import async_timeout
 
 from .const import API_BASE_URL, API_GRAPHQL_URL, CODESPACE_NAMES, STATE_NORMAL, STATUS_EXPIRED, STATUS_PLANNED, STATUS_OPEN
 
+from homeassistant.helpers import instance_id
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -104,7 +106,7 @@ class GlobalQuotaManager:
         _LOGGER.debug(
                     "[GLOBAL QUOTA] Used quota: %s, remaining %s/%s (expires at %s)%s",
                     self.used,
-                    server_available,
+                    self.available,
                     self.allowed,
                     self.expiry_datetime.isoformat() if self.expiry_datetime else "unknown",
                     f" [{self.range}]" if self.range else "",
@@ -280,7 +282,8 @@ class EnturSXApiClient:
         self._operator = operator
         self._lang = lang
         self._session: aiohttp.ClientSession | None = None
-        
+        self._client_name: str | None = None
+
         # Get the global quota manager singleton
         self._quota_manager = get_quota_manager(hass)
 
@@ -369,9 +372,13 @@ class EnturSXApiClient:
             _LOGGER.error("Session not set")
             return {}
 
+        if self._client_name is None:
+            uid = await instance_id.async_get(self._hass)
+            self._client_name = f"homeassistant-entur-sx-{uid[:8]}"
+
         headers = {
             "Content-Type": "application/json",
-            "ET-Client-Name": "homeassistant-entur-sx",
+            "ET-Client-Name": self._client_name,
         }
 
         # Generate requestorId for pagination tracking
