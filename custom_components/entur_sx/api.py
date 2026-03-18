@@ -65,7 +65,7 @@ class GlobalQuotaManager:
         if "rate-limit-available" in headers:
             server_available = int(headers["rate-limit-available"])
             if self.available is not None and server_available != self.available:
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "[GLOBAL QUOTA] Server corrected quota: %s → %s/%s",
                     self.available,
                     server_available,
@@ -103,15 +103,7 @@ class GlobalQuotaManager:
             }
             if raw_range in range_map:
                 self.window_seconds = range_map[raw_range]
-        _LOGGER.debug(
-                    "[GLOBAL QUOTA] Used quota: %s, remaining %s/%s (expires at %s)%s",
-                    self.used,
-                    self.available,
-                    self.allowed,
-                    self.expiry_datetime.isoformat() if self.expiry_datetime else "unknown",
-                    f" [{self.range}]" if self.range else "",
-                )
-        
+
         # Log rate limit info for monitoring
         if self.available is not None and self.allowed is not None:
             range_label = f" [{self.range}]" if self.range else ""
@@ -375,6 +367,7 @@ class EnturSXApiClient:
         if self._client_name is None:
             uid = await instance_id.async_get(self._hass)
             self._client_name = f"homeassistant-entur-sx-{uid[:8]}"
+            _LOGGER.info("Entur API client name: %s", self._client_name)
 
         headers = {
             "Content-Type": "application/json",
