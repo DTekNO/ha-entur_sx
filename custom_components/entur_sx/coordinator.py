@@ -57,6 +57,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Track active disruptions to detect changes
         self._previous_disruptions: dict[str, set[str]] = {}
+        self._first_disruption_check: bool = True
         
         # Throttle/back-off management
         self._throttle_count = 0
@@ -224,6 +225,11 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
             current_disruptions[line_ref] = disruption_ids
         
+        # On the first check _previous_disruptions is empty, so every existing
+        # disruption would appear as "new". Log at DEBUG on startup to avoid
+        # flooding the log with disruptions that were already known.
+        log = _DISRUPTION_LOGGER.debug if self._first_disruption_check else _DISRUPTION_LOGGER.info
+
         # Compare with previous state
         for line_ref in current_disruptions:
             current = current_disruptions.get(line_ref, set())
@@ -237,7 +243,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 status = parts[1] if len(parts) > 1 else "unknown"
                 valid_from = parts[2] if len(parts) > 2 else ""
                 
-                _DISRUPTION_LOGGER.info(
+                log(
                     "[%s] NEW disruption on %s (status: %s) - %s - "
                     "valid from: %s",
                     timestamp,
@@ -254,7 +260,7 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 summary = parts[0] if len(parts) > 0 else "Unknown"
                 status = parts[1] if len(parts) > 1 else "unknown"
                 
-                _DISRUPTION_LOGGER.info(
+                log(
                     "[%s] REMOVED disruption from %s (was: %s) - %s",
                     timestamp,
                     line_ref,
@@ -264,3 +270,4 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Update previous state
         self._previous_disruptions = current_disruptions
+        self._first_disruption_check = False
