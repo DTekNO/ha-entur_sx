@@ -163,7 +163,7 @@ card:
 ## Features
 
 - 🚌 **Monitor multiple transit lines** - Track unlimited lines across Norway
-- 🔄 **Automatic updates** - Refreshes every 75 seconds (respecting Entur's rate limits)
+- 🔄 **Automatic updates** - Refreshes every 2 minutes
 - 🌐 **All Norwegian operators** - Support for every public transport operator in Norway
 - 🎨 **Entur TravelTag badges** - Beautiful badges with transport mode icons and official Entur colors
   - Entity pictures on line sensors
@@ -241,89 +241,7 @@ logger:
 
 Note: The filters option requires Home Assistant 2023.4 or later. For older versions, the disruptions will only appear in the main `home-assistant.log` file.
 
-## Rate Limiting and Throttle Handling
-
-The integration implements smart throttle handling to protect against API rate limits and keep your sensors available during temporary issues.
-
-### Entur API Rate Limits
-
-The Entur SIRI-SX API enforces rate limits using a **rolling time window**:
-- **5 requests per 5-minute rolling window**
-- Response headers indicate remaining quota: `rate-limit-available`, `rate-limit-allowed`, `rate-limit-expiry-time`
-- The API also enforces spike arrest: minimum 100ms between requests
-
-**What is a rolling window?**  
-Unlike fixed windows that reset at specific times, a rolling window continuously tracks requests. For example:
-- If you make 5 requests between 10:00-10:04, you've used your quota
-- You must wait until the oldest request "expires" from the window before making a new one
-- This means spacing requests evenly is critical
-
-### How It Works
-
-**Normal Operation:**
-- Polls Entur API every **75 seconds** (safely under the 5 requests per 5 minutes limit)
-- Each successful update refreshes all monitored lines
-- Response headers are monitored to track remaining quota
-
-**If Rate Limited (429 Error):**
-1. **Smart Back-off**: Automatically increases polling interval
-   - First throttle: waits 2 minutes before retry
-   - Repeated throttles: exponentially increases to max 10 minutes
-   - Resets to normal (75s) after 30 minutes of successful polling
-   
-2. **State Preservation**: Sensors **stay available** showing last known data
-   - No "unavailable" state during cooldown period
-   - Prevents unwanted automation triggers
-   - Maintains service status visibility
-
-3. **Automatic Recovery**: Resumes normal polling once API accepts requests again
-
-### Log Messages
-
-You'll see these messages if throttling occurs:
-
-```
-WARNING: Rate limit hit (429 Too Many Requests) - throttle event #1. Applying 120 second back-off. Will retry after cooldown. Preserving last known state to keep sensors available.
-
-INFO: API access recovered after throttling (back-off ended)
-```
-
-### Why Throttling Might Occur
-
-Even with 60-second intervals, throttling can happen due to:
-- Multiple Home Assistant instances using the same API
-- Config flow validations during setup/reconfiguration
-- Network issues causing request retries
-- Shared API quota across your network
-
-The smart back-off ensures the integration handles these situations gracefully without manual intervention.
-
-## Database & Performance
-
-### Automatic Recorder Optimization
-
-The integration automatically excludes large attributes from recorder history to prevent database bloat:
-
-**Line Sensors - Excluded attributes:**
-- `formatted_content` - Markdown formatted disruption details
-- `entity_picture` - Base64-encoded badge SVG
-
-**Summary Sensor - Excluded attributes:**
-- `markdown_active` - Formatted active disruptions
-- `markdown_planned` - Formatted planned disruptions
-
-**Still recorded:**
-- `state` - Current disruption status or count
-- Essential attributes (valid_from, valid_to, status, etc.)
-
-**Benefits:**
-- ✅ Prevents database bloat from large markdown content
-- ✅ Keeps useful data for history and graphs
-- ✅ All excluded attributes remain available in real-time
-- ✅ No manual recorder configuration needed
-- ✅ Automations and dashboards work perfectly
-
-> **Note**: This follows Home Assistant best practices for attributes not suitable for state history. All data is always available in real-time via `state_attr()`, dashboard cards, and automations.
+> 💡 For details on API rate limiting, throttle handling, and database/recorder optimisation see [TECHNICAL_DETAILS.md](TECHNICAL_DETAILS.md).
 
 ## Example Dashboard Configuration
 
@@ -511,32 +429,6 @@ automation:
             
             Starts: {{ state_attr('sensor.skyss_disruption_sky_line_1', 'valid_from') }}
 ```
-
-## Migration from AppDaemon
-
-If you're migrating from the AppDaemon version:
-
-1. Install this custom integration
-2. Configure it with the same lines you had in `apps.yaml`
-3. Update your dashboard cards to use the new entity IDs (format: `sensor.{device_name}_{operator}_line_{number}`)
-4. Update automations to use the new `status` attribute instead of checking state
-5. The MQTT sensors will become unavailable - you can safely remove them
-6. Uninstall the AppDaemon app
-
-Key differences:
-- **No MQTT broker required**
-- **No AppDaemon required**
-- **TravelTag badges**: Beautiful badges on entity pictures and in markdown content
-- **Summary sensor**: Numeric count of total disruptions (open + planned) for all monitored lines
-- **Language support**: Automatic Norwegian/English based on HA settings
-- **Date formatting**: Locale-aware formatting (e.g., "Mandag, 09. februar kl. 14:30" vs ISO timestamps)
-- **formatted_content attribute**: Rich markdown with badges for use in markdown cards
-- Entity IDs follow HA naming conventions: `sensor.{device_name}_{operator}_line_{number}`
-- Attributes are directly on the sensor (no separate attribute topic)
-- UI-based configuration (no need to edit YAML files)
-- **No `include_future` setting** - all deviations are collected with `status` indicator
-- **New attributes**: `status` (planned/open/expired), `valid_to`, `progress`, `formatted_content`
-- **Lowercase-safe progress detection** - handles API changes
 
 ## Known Limitations
 
