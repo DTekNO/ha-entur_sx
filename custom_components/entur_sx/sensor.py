@@ -936,19 +936,24 @@ class EnturSXSummarySensor(
                 normal.append(line_ref)
                 continue
 
-            # Get travel_tag from the line sensor entity
-            line_name = line_ref.replace(":", "_")
-            line_entity_id = f"sensor.{self._entry_id}_{line_name}"
-            line_state = self.hass.states.get(line_entity_id) if self.hass else None
+            # Reuse the already-generated travel_tag from the line sensor's live state
+            line_unique_id = f"{self._entry_id}_{line_ref.replace(':', '_')}"
+            entity_registry = er.async_get(self.hass)
+            line_entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, line_unique_id)
+            line_state = self.hass.states.get(line_entity_id) if line_entity_id else None
             badge_svg = line_state.attributes.get("travel_tag") if line_state else None
-            
-            # Fallback to generating badge if entity not found (shouldn't happen)
+
+            # Fallback: generate badge if line sensor state is not yet available
             if not badge_svg:
-                transport_mode = self.line_transport_modes.get(line_ref) or "bus"
+                raw_mode = self.line_transport_modes.get(line_ref) or "bus"
+                if ":" in raw_mode:
+                    mode, submode = raw_mode.split(":", 1)
+                else:
+                    mode, submode = raw_mode, None
+                transport_mode = _map_transport_mode(mode, submode)
                 line_display_name = line_ref.split(":")[-1]
                 badge_svg = _create_badge_svg(transport_mode, line_display_name)
-            
-            # Extract transport mode and line display name for template
+
             transport_mode = self.line_transport_modes.get(line_ref) or "bus"
             line_display_name = line_ref.split(":")[-1]
 

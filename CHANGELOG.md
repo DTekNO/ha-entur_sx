@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2026.3.4]
+
+### Fixed
+- **🎨 TravelTag transport mode in summary entity**: The summary sensor's `markdown_active` and `markdown_planned` attributes now show the correct transport mode icon and color in TravelTag badges. Previously the badge always fell back to bus (red) regardless of the actual mode (e.g. tram/Bybanen showed a bus badge). The summary sensor now reuses the already-generated `travel_tag` from each line sensor's live state via the entity registry, falling back to on-the-fly generation with correct mode mapping only if the line sensor is not yet available.
+
+## [2026.3.3]
 
 ### Fixed
 - **🔑 Unique ET-Client-Name per installation**: Each HA instance now sends a unique `ET-Client-Name` header (`homeassistant-entur-sx-<8-char-uid>`) derived from HA's stable instance UUID. Previously all installations shared the same client name and therefore the same rate-limit quota pool on the Entur API. Each installation now gets its own independent 5 req/min quota.
