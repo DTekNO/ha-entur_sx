@@ -11,9 +11,11 @@ This is a Home Assistant custom integration that monitors real-time transit disr
 - **Coordinator** (`coordinator.py`): Manages data updates and disruption tracking
 - **Sensors** (`sensor.py`): Two types of sensors:
   - **Line Sensors**: One per monitored line with TravelTag badges
-  - **Summary Sensor**: Aggregates all lines with numeric disruption count
+  - **Summary Sensor**: Aggregates all lines with numeric disruption count, tracks new disruptions
 - **Config Flow** (`config_flow.py`): UI-based configuration with operator/line discovery
 - **Badge Generation** (`sensor.py`): SVG badge creation with Entur Design System styling
+- **Frontend** (`frontend.py`): Auto-installation of bundled alert card (inspired by Nicxe/homeassistant-trafikinfo-se)
+- **Alert Card** (`www/entur-alert-card.js`): Custom Lovelace card for collapsible timeline view of disruptions
 
 ### Key Files
 - `icon_constants.py`: Transport mode icons (12 modes) and brand colors from Entur Design System
@@ -39,8 +41,18 @@ This is a Home Assistant custom integration that monitors real-time transit disr
 ### Sensor Design
 - **Line sensors**: `entity_picture` shows badge, `formatted_content` has markdown with badges
 - **Summary sensor**: State is numeric (0, 1, 2, etc.) for easy conditional visibility
+  - Tracks new disruptions with `new_disruptions_count` and `new_disruptions` attributes
+  - Uses `RestoreEntity` to persist disruption IDs across restarts (avoids false alerts)
+  - Generates unique hash IDs for each disruption to detect changes
 - All timestamps formatted with locale awareness
 - API text selection handles multiple XML formats: `xml:lang`, `lang`, `<Language>` elements
+
+### Bundled Alert Card
+- **Auto-installation**: Card automatically copies to `/config/www/` and registers as Lovelace resource
+- **Implementation inspired by**: [Nicxe/homeassistant-trafikinfo-se](https://github.com/Nicxe/homeassistant-trafikinfo-se)
+- **Frontend module** (`frontend.py`): Handles file sync, resource registration, and version cache-busting
+- **Card features**: Collapsible timeline, smart date formatting, color-coded status, click to expand
+- **No manual setup required**: Users can immediately use `type: custom:entur-alert-card`
 
 ### Status Types
 - `open`: Active disruption happening now

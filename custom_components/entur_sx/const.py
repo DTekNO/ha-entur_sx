@@ -1,6 +1,13 @@
 """Constants for the Entur Situation Exchange integration."""
 DOMAIN = "entur_sx"
 
+# Frontend card constants
+CARD_FILENAME = "entur-alert-card.js"
+CARD_WWW_DIR = "www"
+CARD_LEGACY_BASE_URL = f"/local/{CARD_FILENAME}"
+FRONTEND_DATA_KEY = f"{DOMAIN}_frontend"
+FRONTEND_DATA_COMPONENT_LISTENER = f"{DOMAIN}_component_listener"
+
 # Configuration
 CONF_OPERATOR = "operator"
 CONF_LINES_TO_CHECK = "lines_to_check"

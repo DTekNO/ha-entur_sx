@@ -11,7 +11,9 @@ Stay ahead of transport delays and disruptions across Norway! This Home Assistan
 
 **Key Features:**
 - 🎨 **Beautiful Entur TravelTag badges** with transport mode icons (bus, train, tram, metro, ferry, etc.)
-- 📊 **Summary sensors** with numeric disruption counts for easy card visibility control
+- 📊 **Summary sensors** with numeric disruption counts for easy card visibility control  
+- 🚨 **Bundled Alert Card** - Collapsible timeline view of disruptions (auto-installs!)
+- 🔔 **New disruption tracking** - Persistent across restarts to avoid false alerts
 - 🌍 **Automatic language support** (Norwegian/English) based on your Home Assistant settings
 - 📱 **Rich markdown formatting** with locale-aware dates and professional styling
 
@@ -245,6 +247,26 @@ Note: The filters option requires Home Assistant 2023.4 or later. For older vers
 > 💡 For details on API rate limiting, throttle handling, and database/recorder optimisation see [TECHNICAL_DETAILS.md](TECHNICAL_DETAILS.md).
 
 ## Example Dashboard Configuration
+
+### Alert Card - Timeline View (Auto-installed!)
+
+The integration includes a custom alert card that displays disruptions in a collapsible timeline format:
+
+```yaml
+type: custom:entur-alert-card
+entity: sensor.skyss_disruption_summary
+title: Transport Alerts
+show_timeline: true
+max_items: 10
+```
+
+**Features:**
+- Click alerts to expand/collapse full details
+- Smart time formatting ("Today", "Tomorrow", etc.)
+- Color-coded (blue = active, orange = planned)
+- Automatic sorting by start time
+
+See [ALERT_CARD.md](ALERT_CARD.md) for full documentation.
 
 ### Basic Status Card with Badges
 

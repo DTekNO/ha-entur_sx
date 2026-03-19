@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .api import EnturSXApiClient
 from .const import DOMAIN, normalize_language
 from .coordinator import EnturSXDataUpdateCoordinator
+from .frontend import async_setup_frontend
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +20,17 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 # Sub-keys within hass.data[DOMAIN] for shared coordinator management
 _SHARED_COORDINATORS = "coordinators"  # {operator: EnturSXDataUpdateCoordinator}
 _COORDINATOR_REFS = "coordinator_refs"  # {operator: int}  reference count
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the Entur Situation Exchange component.
+    
+    This is called once when Home Assistant starts, regardless of how many
+    config entries exist. It sets up the frontend card.
+    """
+    # Setup frontend card (copies to www and registers as Lovelace resource)
+    await async_setup_frontend(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
