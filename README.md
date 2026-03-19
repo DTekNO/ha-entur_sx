@@ -4,7 +4,8 @@
 [![Validate with HACS][hacs-validation-badge]][hacs-validation-url]
 [![release][release-badge]][release-url]
 ![Maintenance][maintenance-badge]
-![downloads][downloads-badge]
+![GitHub Downloads (all assets, all releases)][downloads-total]
+![GitHub Downloads (all assets, latest release)][downloads-latest]
 
 Stay ahead of transport delays and disruptions across Norway! This Home Assistant custom integration monitors real-time service deviations from Entur.no, alerting you to delays, cancellations, and route changes on your regular transit lines.
 
@@ -495,4 +496,5 @@ This project is licensed under the MIT License.
 [maintenance-badge]: https://img.shields.io/maintenance/yes/2026.svg
 [release-badge]: https://img.shields.io/github/release/DTekNO/ha-entur_sx.svg
 [release-url]: https://github.com/DTekNO/ha-entur_sx/releases
-[downloads-badge]: https://img.shields.io/github/downloads/DTekNO/ha-entur_sx/total
+[downloads-total]: https://img.shields.io/github/downloads/DTekNO/ha-entur_sx/total
+[downloads-latest]: https://img.shields.io/github/downloads/DTekNO/ha-entur_sx/latest/total
