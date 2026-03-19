@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -16,6 +17,9 @@ from .frontend import async_setup_frontend
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+# Config entry only - no YAML configuration supported
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # Sub-keys within hass.data[DOMAIN] for shared coordinator management
 _SHARED_COORDINATORS = "coordinators"  # {operator: EnturSXDataUpdateCoordinator}
