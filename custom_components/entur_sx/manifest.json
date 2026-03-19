@@ -1,6 +1,7 @@
 {
   "domain": "entur_sx",
   "name": "Entur Situation Exchange",
+  "after_dependencies": ["lovelace"],
   "codeowners": [
     "@DTekNOdev"
   ],
@@ -10,6 +11,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/DTekNO/ha-entur_sx/issues",
   "requirements": [],
-  "after_dependencies": ["lovelace"],
   "version": "2026.3.4"
 }
