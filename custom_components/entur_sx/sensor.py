@@ -739,11 +739,11 @@ class EnturSXSensor(
             "travel_tag": self.travel_tag,  # Full badge with line number for template use
         }
 
-        # Include all deviations if there are multiple
-        if len(line_data) > 1:
-            attrs["all_deviations"] = line_data
-            attrs["total_deviations"] = len(line_data)
+        # Always include all deviations list
+        attrs["all_deviations"] = line_data
+        attrs["total_deviations"] = len(line_data)
 
+        if len(line_data) > 1:
             # Count by status
             status_counts = {}
             for item in line_data:
