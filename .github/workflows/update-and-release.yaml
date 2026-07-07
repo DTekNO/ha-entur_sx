@@ -69,6 +69,7 @@ jobs:
       - name: 📦 Create integration ZIP
         run: |
           DOMAIN="${{ needs.update-manifest.outputs.integration_domain }}"
+          cp LICENSE "custom_components/$DOMAIN/"
           cd ${{ github.workspace }}/custom_components/$DOMAIN
           zip $DOMAIN.zip -r ./
           echo "Created $DOMAIN.zip"
