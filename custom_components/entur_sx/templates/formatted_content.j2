@@ -12,12 +12,14 @@
 {% if outer_index > 0 %}<br>
 {% endif %}
 
-{#- First alert with badge for the line -#}
+{#- First alert with badge for the line (omitted in per-item mode — card row shows the image) -#}
+{%- if not per_item %}
 <ha-alert alert-type="error">
 {%- if travel_tag %}
 <img src="{{ travel_tag }}" alt="{{ transport_mode }} {{ line_name }}" height="32">
 {%- endif %}
 </ha-alert>
+{%- endif %}
 
 {#- Show each disruption for this line -#}
 {%- for disruption in line_disruptions %}
@@ -39,8 +41,8 @@
   </tr>
 </table>
 
-{# Description text #}
-{%- if description %}
+{# Description shown by card natively in per-item mode #}
+{%- if description and not per_item %}
 {{ description }}
 {%- endif %}
 

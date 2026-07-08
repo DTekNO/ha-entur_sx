@@ -12,12 +12,14 @@
 {% if outer_index > 0 %}<br>
 {% endif %}
 
-{#- Første varsel med badge for linjen -#}
+{#- Første varsel med badge for linjen (utelatt i per-item-modus — kortrad viser bildet) -#}
+{%- if not per_item %}
 <ha-alert alert-type="error">
 {%- if travel_tag %}
 <img src="{{ travel_tag }}" alt="{{ transport_mode }} {{ line_name }}" height="32">
 {%- endif %}
 </ha-alert>
+{%- endif %}
 
 {#- Vis hvert avvik for denne linjen -#}
 {%- for disruption in line_disruptions %}
@@ -39,8 +41,8 @@
   </tr>
 </table>
 
-{# Beskrivelsestekst #}
-{%- if description %}
+{# Beskrivelse vises av kortet i per-item-modus #}
+{%- if description and not per_item %}
 {{ description }}
 
 {%- endif %}

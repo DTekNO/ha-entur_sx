@@ -462,7 +462,7 @@ class EnturSXSensor(
     """Sensor for a single Entur transit line deviation status."""
 
     _attr_has_entity_name = True
-    _unrecorded_attributes = frozenset({"formatted_content", "entity_picture", "travel_tag"})
+    _unrecorded_attributes = frozenset({"formatted_content", "all_deviations", "entity_picture", "travel_tag"})
 
     def __init__(
         self,
@@ -565,7 +565,7 @@ class EnturSXSensor(
             )
             self._formatted_content_template = None
 
-    def _generate_formatted_content(self, disruptions: list[dict]) -> str:
+    def _generate_formatted_content(self, disruptions: list[dict], per_item: bool = False) -> str:
         """Generate formatted content from template."""
         if self._formatted_content_template is None:
             return "Template not available"
@@ -625,6 +625,7 @@ class EnturSXSensor(
         try:
             return self._formatted_content_template.render(
                 disruptions=enriched_disruptions,
+                per_item=per_item,
             )
         except Exception as err:
             _LOGGER.error("Failed to render formatted_content template: %s", err)
@@ -739,8 +740,13 @@ class EnturSXSensor(
             "travel_tag": self.travel_tag,  # Full badge with line number for template use
         }
 
-        # Always include all deviations list
-        attrs["all_deviations"] = line_data
+        # Always include all deviations list, each with its own formatted_content
+        enriched_deviations = []
+        for deviation in line_data:
+            item = dict(deviation)
+            item["formatted_content"] = self._generate_formatted_content([deviation], per_item=True)
+            enriched_deviations.append(item)
+        attrs["all_deviations"] = enriched_deviations
         attrs["total_deviations"] = len(line_data)
 
         if len(line_data) > 1:
