@@ -13,6 +13,18 @@ This directory contains the Entur Situation Exchange custom integration.
 - `sensor.py` - Sensor platform implementation
 - `strings.json` - UI strings
 - `translations/` - Localization files
+- `templates/formatted_content.j2` - English Jinja2 template for `formatted_content`
+- `templates/formatted_content_no.j2` - Norwegian Jinja2 template for `formatted_content`
+
+## Templates
+
+The `formatted_content` attribute and the per-item `formatted_content` on each deviation in `all_deviations` are both rendered using the Jinja2 templates in the `templates/` directory.
+
+The template receives a `per_item` boolean variable:
+- `per_item=False` (default) — full bulletin: TravelTag badge + title + dates + description. Used for entity-level `formatted_content`.
+- `per_item=True` — supplementary detail only: dates table, no badge, no description (the card row already shows these). Used for per-item `formatted_content` in `all_deviations`.
+
+This flag is set internally by the integration and is transparent to end users.
 
 ## Development
 

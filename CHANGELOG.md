@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.7.1]
+
+### Added
+- **Per-alert `formatted_content`**: Each deviation in the `all_deviations` attribute now carries its own `formatted_content` field. When used with [ha-alert-card](https://github.com/DTekNO/ha-alert-card), expanding an alert shows only that disruption's detail — dates and description — not all disruptions on the entity.
+
+### Changed
+- **Supplementary expansion mode**: The Jinja2 templates (`formatted_content.j2` / `formatted_content_no.j2`) now accept a `per_item` flag. When rendering per-alert content, the travel_tag badge and description body are omitted — the card row already shows these via `image_attribute: travel_tag`. Only the From/To date block is rendered, eliminating redundancy in the expanded view.
+- **Recorder exclusion**: `all_deviations` added to `_unrecorded_attributes` — the attribute (which contains embedded HTML) is no longer written to the history database.
+
+### Compatibility
+- Works with ha-alert-card `image_attribute: travel_tag` to show the TravelTag badge in each alert row
+- Entity-level `formatted_content` is unchanged — existing markdown cards continue to work without any changes
+
 ## [2026.3.4]
 
 ### Fixed

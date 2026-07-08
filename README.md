@@ -106,7 +106,9 @@ The integration creates one sensor for each monitored line. Each sensor shows:
   - `progress`: Raw progress value from API (OPEN, CLOSED, etc.)
   - `line_ref`: The line reference
   - `formatted_content`: Markdown-formatted content with TravelTag badges (for markdown cards)
-  - `all_deviations`: Array of all deviations if multiple exist
+  - `all_deviations`: Array of all deviations. Each item includes all raw deviation fields plus:
+    - `formatted_content`: Markdown HTML scoped to this single deviation (dates only — the TravelTag badge and description are omitted since the card row shows these). Ready for use as per-alert expansion detail in ha-alert-card.
+    - `travel_tag`: The TravelTag SVG badge (same as the entity-level attribute, included for per-item card lookup)
   - `total_deviations`: Count of all deviations
   - `deviations_by_status`: Count of deviations grouped by status
 
@@ -124,11 +126,35 @@ If enabled, a summary sensor is created that aggregates all monitored lines:
 
 The numeric state makes it easy to show/hide cards based on whether any disruptions exist.
 
+### Display with ha-alert-card
+
+[ha-alert-card](https://github.com/DTekNO/ha-alert-card) is the recommended companion card for displaying disruptions interactively — with dismiss, severity sorting, paging, and per-alert expansion.
+
+```yaml
+type: custom:ha-alert-card
+title: Transit disruptions
+sources:
+  - entity: sensor.skyss_disruption_sky_line_1021
+    name: Skyss
+    attribute: all_deviations
+    image_attribute: travel_tag   # Shows the TravelTag badge in each alert row
+    mapping:
+      title: summary
+      message: description
+      severity: status
+      time: valid_from
+      id: id
+```
+
+When an alert is expanded, the card renders the per-item `formatted_content` from `all_deviations`, showing the From/To dates for that disruption only. The TravelTag badge and description are shown in the collapsed row — the expanded detail adds only what the row cannot fit.
+
+Multiple line sensors can be combined in a single card by adding more `sources` entries.
+
 ### Display with Markdown Cards
 
 #### Individual Line Disruptions
 
-The integration provides a `formatted_content` attribute that displays disruptions as Entur-styled TravelTag badges:
+The integration provides a `formatted_content` attribute that displays all disruptions for a line as Entur-styled TravelTag badges — suitable for markdown cards and notifications:
 
 ```yaml
 type: markdown
