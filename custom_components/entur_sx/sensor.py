@@ -738,6 +738,15 @@ class EnturSXSensor(
             "progress": current.get("progress"),
             "line_ref": self.line_ref,
             "travel_tag": self.travel_tag,  # Full badge with line number for template use
+            # Feed identity and provenance.  When a line carries two similar
+            # alerts they are usually the same event reported by two
+            # publishers — publisher_name tells the reader which is which.
+            "situation_number": current.get("situation_number"),
+            "publisher": current.get("publisher"),
+            "publisher_name": current.get("publisher_name"),
+            "severity": current.get("severity"),
+            "report_type": current.get("report_type"),
+            "created": current.get("created"),
         }
 
         # Always include all deviations list, each with its own formatted_content
@@ -1024,6 +1033,13 @@ class EnturSXSummarySensor(
                     'valid_to_formatted': valid_to_formatted,
                     'status': status,
                     'disruption_id': disruption_id,
+                    # Provenance: two publishers often report the same event, so
+                    # a card can show WHY a line carries two similar alerts.
+                    'situation_number': deviation.get('situation_number', ''),
+                    'publisher': deviation.get('publisher', ''),
+                    'publisher_name': deviation.get('publisher_name', ''),
+                    'severity': deviation.get('severity', ''),
+                    'report_type': deviation.get('report_type', ''),
                 }
                 
                 # Store in map for later comparison

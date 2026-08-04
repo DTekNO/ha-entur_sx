@@ -292,6 +292,45 @@ class EnturSXApiClient:
         """Set the aiohttp session."""
         self._session = session
 
+    @staticmethod
+    def _value(field: Any) -> str:
+        """Unwrap a SIRI field that may be {"value": x} or a bare scalar.
+
+        The JSON rendering of SIRI-SX is inconsistent: SituationNumber,
+        ParticipantRef and LineRef arrive as {"value": ...} while Severity,
+        ReportType and Progress arrive as plain strings.
+        """
+        if isinstance(field, dict):
+            return str(field.get("value", "") or "")
+        return "" if field is None else str(field)
+
+    @classmethod
+    def _publisher(cls, situation_number: str) -> tuple[str, str]:
+        """Derive the publishing codespace and its display name.
+
+        The codespace prefix of SituationNumber identifies who published the
+        situation, and is the only consistent way to tell publishers apart:
+        ParticipantRef merely echoes the dataset being queried (every situation
+        in the SKY feed says "SKY", including those published by GCO).
+        Verified present on 126/126 situations across the SKY, RUT, ATB and KOL
+        datasets.
+
+        This matters because two publishers routinely report the SAME real-world
+        event — e.g. line 1033 carrying both a Skyss incident report and a
+        Fjord1-via-GCO traffic message for one emergency-vehicle transport.
+        Surfacing the publisher lets a card explain why both are shown.
+
+        Names come from CODESPACE_NAMES; unmapped codespaces fall back to the
+        bare code.  GCO is genuinely unresolvable — it is a valid datasetId that
+        publishes across SKY, NOR, FIN, KOL and ATB, but it appears in neither
+        Entur's operators nor its authorities registry, so no official name
+        exists to look up.
+        """
+        if not situation_number or ":" not in situation_number:
+            return "", ""
+        codespace = situation_number.split(":", 1)[0]
+        return codespace, CODESPACE_NAMES.get(codespace, codespace)
+
     def _select_text_by_language(self, text_objects: list[dict[str, Any]]) -> str:
         """Select best text from array based on language preference.
         
@@ -588,91 +627,46 @@ class EnturSXApiClient:
         allitems_dict: dict[str, list[dict[str, Any]]] = {}
         now_timestamp = datetime.now(timezone.utc).timestamp()
 
+        skipped = 0
         try:
             siri = data.get("Siri", {})
             service_delivery = siri.get("ServiceDelivery", {})
             sx_delivery = service_delivery.get("SituationExchangeDelivery", [])
+            if not isinstance(sx_delivery, list):
+                sx_delivery = [sx_delivery]
 
             for sed in sx_delivery:
                 situations = sed.get("Situations", {})
                 elements = situations.get("PtSituationElement", [])
+                if not isinstance(elements, list):
+                    elements = [elements] if elements else []
 
                 for element in elements:
-                    progress = element.get("Progress", "")
-                    progress_lower = progress.lower()
-
-                    affects = element.get("Affects", {})
-                    networks = affects.get("Networks")
-
-                    if not networks:
-                        continue
-
-                    # Get validity period
-                    validity_periods = element.get("ValidityPeriod", [])
-                    if not validity_periods:
-                        continue
-
-                    validity_period = validity_periods[0]
-                    start_time = validity_period.get("StartTime")
-                    end_time = validity_period.get("EndTime")
-
-                    if not start_time:
-                        continue
-
-                    # Determine status based on time and Progress field
-                    start_timestamp = datetime.fromisoformat(start_time).timestamp()
-
-                    if now_timestamp < start_timestamp:
-                        status = STATUS_PLANNED
-                    elif end_time:
-                        end_timestamp = datetime.fromisoformat(end_time).timestamp()
-                        if now_timestamp > end_timestamp:
-                            status = STATUS_EXPIRED
-                        else:
-                            status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
-                    else:
-                        status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
-
-                    # Extract text once per situation (not per line)
-                    summaries = element.get("Summary", [])
-                    descriptions = element.get("Description", [])
-                    if not isinstance(summaries, list):
-                        summaries = [summaries] if summaries else []
-                    if not isinstance(descriptions, list):
-                        descriptions = [descriptions] if descriptions else []
-
-                    summary = self._select_text_by_language(summaries) or STATE_NORMAL
-                    description = self._select_text_by_language(descriptions) or STATE_NORMAL
-
-                    situation_entry = {
-                        "valid_from": start_time,
-                        "valid_to": end_time,
-                        "summary": summary,
-                        "description": description,
-                        "status": status,
-                        "progress": progress_lower,
-                    }
-
-                    # Add this situation to every line it affects
-                    affected_networks = networks.get("AffectedNetwork", [])
-                    for an in affected_networks:
-                        affected_lines = an.get("AffectedLine", [])
-                        if not affected_lines:
-                            continue
-
-                        for affected_line in affected_lines:
-                            line_ref_obj = affected_line.get("LineRef", {})
-                            line_ref = line_ref_obj.get("value")
-
-                            if not line_ref:
-                                continue
-
-                            if line_ref not in allitems_dict:
-                                allitems_dict[line_ref] = []
-                            allitems_dict[line_ref].append(situation_entry)
+                    # Isolate each situation: a single malformed entry must not
+                    # discard every other line's data for this whole cycle.
+                    try:
+                        self._parse_situation(
+                            element, allitems_dict, now_timestamp
+                        )
+                    except Exception as err:
+                        skipped += 1
+                        _LOGGER.warning(
+                            "Skipping malformed situation %s: %s",
+                            self._value(element.get("SituationNumber"))
+                            or "<no SituationNumber>",
+                            err,
+                            exc_info=True,
+                        )
 
         except Exception as err:
             _LOGGER.error("Error parsing API response: %s", err, exc_info=True)
+
+        if skipped:
+            _LOGGER.warning(
+                "Skipped %d malformed situation(s); %d lines parsed successfully",
+                skipped,
+                len(allitems_dict),
+            )
 
         # Sort each line: OPEN first, then PLANNED, then EXPIRED; newest first within group
         status_priority = {STATUS_OPEN: 0, STATUS_PLANNED: 1, STATUS_EXPIRED: 2}
@@ -687,6 +681,118 @@ class EnturSXApiClient:
 
         _LOGGER.debug("Parsed deviations for %d lines", len(allitems_dict))
         return allitems_dict
+
+    def _parse_situation(
+        self,
+        element: dict[str, Any],
+        allitems_dict: dict[str, list[dict[str, Any]]],
+        now_timestamp: float,
+    ) -> None:
+        """Parse one PtSituationElement and file it under every line it affects.
+
+        Raises on malformed input; the caller isolates the failure so one bad
+        situation cannot discard the whole feed.
+        """
+        progress = self._value(element.get("Progress"))
+        progress_lower = progress.lower()
+
+        affects = element.get("Affects", {})
+        networks = affects.get("Networks")
+
+        if not networks:
+            # Situations targeting only StopPoints or VehicleJourneys are not
+            # yet supported (stop closures, single-departure cancellations).
+            _LOGGER.debug(
+                "Situation %s affects %s, not Networks — not supported yet",
+                self._value(element.get("SituationNumber")),
+                sorted(affects.keys()) or "nothing",
+            )
+            return
+
+        # Get validity period
+        validity_periods = element.get("ValidityPeriod", [])
+        if not isinstance(validity_periods, list):
+            validity_periods = [validity_periods] if validity_periods else []
+        if not validity_periods:
+            return
+
+        validity_period = validity_periods[0]
+        start_time = validity_period.get("StartTime")
+        end_time = validity_period.get("EndTime")
+
+        if not start_time:
+            return
+
+        # Determine status based on time and Progress field
+        start_timestamp = datetime.fromisoformat(start_time).timestamp()
+
+        if now_timestamp < start_timestamp:
+            status = STATUS_PLANNED
+        elif end_time:
+            end_timestamp = datetime.fromisoformat(end_time).timestamp()
+            if now_timestamp > end_timestamp:
+                status = STATUS_EXPIRED
+            else:
+                status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
+        else:
+            status = STATUS_EXPIRED if progress_lower == "closed" else STATUS_OPEN
+
+        # Extract text once per situation (not per line)
+        summaries = element.get("Summary", [])
+        descriptions = element.get("Description", [])
+        if not isinstance(summaries, list):
+            summaries = [summaries] if summaries else []
+        if not isinstance(descriptions, list):
+            descriptions = [descriptions] if descriptions else []
+
+        summary = self._select_text_by_language(summaries) or STATE_NORMAL
+        description = self._select_text_by_language(descriptions) or STATE_NORMAL
+
+        # Identity and provenance.  Two publishers routinely report the same
+        # real-world event, so the publisher is what lets a card explain why
+        # a line shows two similar alerts.  See _publisher().
+        situation_number = self._value(element.get("SituationNumber"))
+        publisher, publisher_name = self._publisher(situation_number)
+
+        situation_entry = {
+            "valid_from": start_time,
+            "valid_to": end_time,
+            "summary": summary,
+            "description": description,
+            "status": status,
+            "progress": progress_lower,
+            # feed identity — stable across edits to the text or validity
+            "situation_number": situation_number,
+            # who published it (codespace) and its friendly name
+            "publisher": publisher,
+            "publisher_name": publisher_name,
+            # "noImpact" marks advisories that duplicate a real incident
+            "severity": self._value(element.get("Severity")),
+            # "incident" (unplanned) vs "general" (info) vs "routeDiversion" etc.
+            "report_type": self._value(element.get("ReportType")),
+            "created": self._value(element.get("CreationTime")),
+        }
+
+        # Add this situation to every line it affects
+        affected_networks = networks.get("AffectedNetwork", [])
+        if not isinstance(affected_networks, list):
+            affected_networks = [affected_networks] if affected_networks else []
+        for an in affected_networks:
+            affected_lines = an.get("AffectedLine", [])
+            if not isinstance(affected_lines, list):
+                affected_lines = [affected_lines] if affected_lines else []
+            if not affected_lines:
+                continue
+
+            for affected_line in affected_lines:
+                line_ref = self._value(affected_line.get("LineRef"))
+
+                if not line_ref:
+                    continue
+
+                if line_ref not in allitems_dict:
+                    allitems_dict[line_ref] = []
+                allitems_dict[line_ref].append(situation_entry)
 
     @staticmethod
     async def async_get_operators(session: aiohttp.ClientSession) -> dict[str, str]:

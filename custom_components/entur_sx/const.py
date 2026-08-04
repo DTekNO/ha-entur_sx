@@ -109,7 +109,15 @@ CODESPACE_NAMES = {
     "VYG": "Vy",
     "VYX": "Vy Buss",
     
-    # Codespaces found in SIRI-SX but not fully mapped
+    # Codespaces found in SIRI-SX but not fully mapped.
+    #
+    # GCO is not resolvable from any Entur API: it appears in neither the 275
+    # operators nor the 79 authorities returned by the journey-planner GraphQL,
+    # and there is no organisations endpoint.  It *is* a valid datasetId, and it
+    # publishes situations against SKY, NOR, FIN, KOL and ATB lines — i.e. it is
+    # a shared channel that operators publish through on an authority's behalf
+    # ("Mvh Fjord1 på vegner av Skyss").  Left as the bare code deliberately
+    # rather than guessing a company name; checked 2026-08-04.
     "CTS": "CTS",
     "GCO": "GCO",
     "NSB": "NSB",
