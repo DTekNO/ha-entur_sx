@@ -79,7 +79,7 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Fetch operators
         session = async_get_clientsession(self.hass)
-        self._operators = await EnturSXApiClient.async_get_operators(session)
+        self._operators = await EnturSXApiClient.async_get_operators(self.hass, session)
         
         if not self._operators:
             errors["base"] = "cannot_connect"
@@ -126,7 +126,7 @@ class EnturSXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 session = async_get_clientsession(self.hass)
                 _LOGGER.debug("Fetching lines for operator: %s", self._operator)
                 self._available_lines = await EnturSXApiClient.async_get_lines_for_operator(
-                    session, self._operator
+                    self.hass, session, self._operator
                 )
                 _LOGGER.debug("Found %d lines for operator %s", len(self._available_lines), self._operator)
                 
@@ -389,7 +389,7 @@ class EnturSXOptionsFlow(config_entries.OptionsFlow):
         session = async_get_clientsession(self.hass)
         try:
             self._available_lines = await EnturSXApiClient.async_get_lines_for_operator(
-                session, operator
+                self.hass, session, operator
             )
             
             if not self._available_lines:

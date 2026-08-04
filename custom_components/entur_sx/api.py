@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 import aiohttp
 import async_timeout
 
-from .const import API_BASE_URL, API_GRAPHQL_URL, CODESPACE_NAMES, STATE_NORMAL, STATUS_EXPIRED, STATUS_PLANNED, STATUS_OPEN
+from .const import API_BASE_URL, API_GRAPHQL_URL, CODESPACE_NAMES, ET_CLIENT_NAME, STATE_NORMAL, STATUS_EXPIRED, STATUS_PLANNED, STATUS_OPEN
 
 from homeassistant.helpers import instance_id
 
@@ -23,6 +23,24 @@ _LOGGER = logging.getLogger(__name__)
 
 # Global quota manager key for hass.data
 QUOTA_MANAGER_KEY = "entur_sx_quota_manager"
+
+
+async def async_client_name(hass: "HomeAssistant") -> str:
+    """Build the ET-Client-Name header value for this installation.
+
+    Entur keys its rate-limit quotas on ET-Client-Name, so a shared value pools
+    every installation into one bucket and a single busy user can exhaust the
+    quota for everyone.  ffe7239 fixed that for the realtime SX feed, where the
+    pool is only 5 req/min; the journey-planner GraphQL used for discovery is
+    keyed the same way (1000 other-requests/min for identified consumers, 60 if
+    unidentified), so it needs the same treatment.
+
+    Derived from Home Assistant's stable instance UUID so it survives restarts.
+    Every call site must use this — there is no correct reason to send the bare
+    ET_CLIENT_NAME constant.
+    """
+    uid = await instance_id.async_get(hass)
+    return f"{ET_CLIENT_NAME}-{uid[:8]}"
 
 
 class GlobalQuotaManager:
@@ -404,8 +422,7 @@ class EnturSXApiClient:
             return {}
 
         if self._client_name is None:
-            uid = await instance_id.async_get(self._hass)
-            self._client_name = f"homeassistant-entur-sx-{uid[:8]}"
+            self._client_name = await async_client_name(self._hass)
             _LOGGER.info("Entur API client name: %s", self._client_name)
 
         headers = {
@@ -795,7 +812,9 @@ class EnturSXApiClient:
                 allitems_dict[line_ref].append(situation_entry)
 
     @staticmethod
-    async def async_get_operators(session: aiohttp.ClientSession) -> dict[str, str]:
+    async def async_get_operators(
+        hass: "HomeAssistant", session: aiohttp.ClientSession
+    ) -> dict[str, str]:
         """Fetch list of operators (codespaces) from Entur GraphQL API.
         
         Extracts all unique 3-letter codespaces from the operators API and maps them
@@ -815,7 +834,7 @@ class EnturSXApiClient:
 
         headers = {
             "Content-Type": "application/json",
-            "ET-Client-Name": "homeassistant-entur-sx",
+            "ET-Client-Name": await async_client_name(hass),
         }
 
         try:
@@ -879,7 +898,7 @@ class EnturSXApiClient:
 
     @staticmethod
     async def async_get_lines_for_operator(
-        session: aiohttp.ClientSession, operator: str
+        hass: "HomeAssistant", session: aiohttp.ClientSession, operator: str
     ) -> dict[str, str]:
         """Fetch list of lines for a specific operator (codespace) from Entur GraphQL API.
         
@@ -909,7 +928,7 @@ class EnturSXApiClient:
 
         headers = {
             "Content-Type": "application/json",
-            "ET-Client-Name": "homeassistant-entur-sx",
+            "ET-Client-Name": await async_client_name(hass),
         }
 
         try:

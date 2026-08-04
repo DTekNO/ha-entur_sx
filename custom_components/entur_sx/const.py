@@ -114,6 +114,15 @@ STATUS_EXPIRED = "expired"
 # "{name} ({codespace})".
 # The codespace is what's used in the SIRI-SX datasetId parameter, and also the
 # prefix of every SituationNumber — see EnturSXApiClient._publisher().
+# ET-Client-Name is mandatory on every Entur API call, open or partner, and must
+# be "<company>-<application>" (lowercase, no spaces).  Requests without it may
+# be rate limited or blocked.  See developer.entur.no/docs/getting-started.md.
+#
+# Define it ONCE here.  Per-instance calls append a short Home Assistant
+# instance id so Entur can attribute rate-limit usage to a single installation;
+# the static discovery helpers, which have no hass reference, send the base value.
+ET_CLIENT_NAME = "homeassistant-entur-sx"
+
 CODESPACE_NAMES = {
     # Regional transport authorities and national operators
     "AKT": "Agder Kollektivtrafikk",
