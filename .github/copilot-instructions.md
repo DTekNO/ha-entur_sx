@@ -71,6 +71,63 @@ This is a Home Assistant custom integration that monitors real-time transit disr
 - Device name is user-configurable (used in sensor entity IDs)
 - Summary sensor creation is optional (can be disabled)
 
+## Entur documentation — machine-readable
+
+Entur publishes its docs for LLMs. **Prefer these over scraping the HTML site or
+guessing at API behaviour.**
+
+| URL | What it is |
+|---|---|
+| `https://developer.entur.no/llms.txt` | Index of every doc page, ~7 KB — **start here as an agent** |
+| `https://developer.entur.no/llms-full.txt` | All documentation in one file, ~200 KB |
+| `https://developer.entur.no/<path>.md` | Any page as Markdown, e.g. `/docs/authentication.md` |
+| `https://developer.entur.no/docs/getting-started.md` | Human onboarding: service tiers, `ET-Client-Name`, first call |
+
+Entur's own guidance calls `/llms.txt` "the best starting point for any LLM".
+`getting-started.md` is written for a person arriving new and its Markdown leaks
+raw MDX components, so read it for conventions and use `llms.txt` to find things.
+
+Gotcha: these live at the **site root**, not under `/docs`. `/llms.txt` works;
+`/docs/llms.txt` returns 404.
+
+Most useful pages for this integration:
+- `/open-data/realtime.md` — the SIRI/GTFS-RT feeds, and the **"Available data
+  streams" table**, which is the authoritative list of codespace owners
+- `/docs/open-services/journey-planner/rate-limiting.md` — quota rules
+- `/apis/api-specs.md` — every OpenAPI/GraphQL spec with download URLs
+
+`ET-Client-Name` is mandatory on every Entur API and must be
+`<company>-<application>`, lowercase without spaces; requests without it may be
+rate limited or blocked. This integration sends `homeassistant-entur-sx`.
+
+### Verified API facts (checked 2026-08-04)
+
+Do not re-derive these; they are easy to get wrong.
+
+- **`SituationNumber` is always present** and its codespace prefix identifies the
+  **publisher** (verified 126/126 situations across SKY, RUT, ATB, KOL). Use it
+  for identity and provenance — see `EnturSXApiClient._publisher()`.
+- **`ParticipantRef` is NOT the publisher.** It echoes the dataset queried, so
+  every situation in the SKY feed says `SKY` even when published by GCO.
+- **Two publishers routinely report the same real-world event.** Line 1033 has
+  carried both a Skyss `incident` and a Fjord1-via-GCO `general` message for one
+  emergency-vehicle transport. Duplicate-looking alerts are usually correct;
+  check `situation_number` before assuming a parsing bug. `Severity: noImpact`
+  tends to mark the redundant one.
+- **Codespace owner = `authorities`, not `operators`.** `operators` returns the
+  companies running services, so a codespace's operators include minor ones
+  (`BRA` → "Forsvarsbygg Oscarsborgfergen"). The owner is in `authorities`,
+  usually where the id suffix matches the codespace (`SKY:Authority:SKY`) or
+  where it is the only one. Assume the API is right and `CODESPACE_NAMES` is
+  stale — Norwegian authorities rebrand often (NSB→Vy, Troms
+  fylkestrafikk→Svipper) while the codespace tag is kept stable.
+- **`Affects` may target `Networks`, `StopPoints` or `VehicleJourneys`.** Only
+  `Networks` is handled; the other two are logged at debug and skipped.
+- **Descriptions can contain HTML** — `<br>` and `<a href>` both occur live. See
+  the escaping note in `HTMLSanitizer`: `HTMLParser` decodes character
+  references, so anything re-emitted must be re-escaped or encoded text becomes
+  live markup.
+
 ## Dependencies
 - Entur SIRI-SX REST API: https://api.entur.io/realtime/v1/rest/sx
 - Entur Design System for icons and colors (EUPL-1.2 licensed)
