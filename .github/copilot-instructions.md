@@ -36,6 +36,22 @@ This is a Home Assistant custom integration that monitors real-time transit disr
 - Colors from `TRANSPORT_COLORS` in `icon_constants.py` (official Entur brand colors)
 - Icons from `TRANSPORT_ICONS` as base64-encoded white SVGs
 
+### Attribute structure — read this before changing attributes
+
+Line sensors expose each disruption **twice**: a flat copy of the current one at
+the top level, plus the full list in `all_deviations`. Diagram and rationale under
+"Line Sensor Attribute Structure" in [TECHNICAL_DETAILS.md](../TECHNICAL_DETAILS.md).
+
+The flat block is **not** redundant — do not "tidy it away". `all_deviations` is
+excluded from the recorder, so the flat fields are the only disruption data that
+reaches history; templates that iterate over line *entities* read them directly;
+and `status`, `valid_from`, `valid_to` and `description` are used in README and
+CARD_EXAMPLES, so user dashboards depend on them.
+
+Any new per-disruption field must be added in **both** places — the flat block
+and the `all_deviations` items — or it will be missing from whichever the
+consumer happens to use.
+
 ### Sensor Design
 - **Line sensors**: `entity_picture` shows badge, `formatted_content` has markdown with badges
 - **Summary sensor**: State is numeric (0, 1, 2, etc.) for easy conditional visibility
