@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.8.1]
+
+Alerts now say **who reported them**. When a line shows two near-identical
+disruptions, that is usually one real event reported by two publishers — this
+release exposes the fields that tell them apart, so a card can show it. Also
+hardens the feed parser: a single malformed situation no longer wipes out every
+line's data for that update, and the HTML sanitizer no longer turns safely
+encoded text into live markup.
+
+### Added
+- **🏷️ Publisher and identity attributes**: Line sensors, and every entry in `all_deviations`, now carry `situation_number`, `publisher`, `publisher_name`, `severity`, `report_type` and `created`. This answers the "why am I seeing the same disruption twice?" question — e.g. Skyss line 1033 has carried a Skyss `incident` ("Forseinkingar i sambandet…") alongside a Fjord1-via-GCO `general` message ("Trafikkmelding") for a single emergency-vehicle transport. Both are genuine; they are separate situations from separate publishers. `publisher_name` lets a card label them, and `severity: noImpact` usually marks the redundant advisory if you would rather hide it.
+- **🗺️ Six more transport authorities recognised**: `AVI` (Avinor), `BNR` (SJ Nord via Bane NOR), `FIN` (Snelandia), `FLT` (Flytoget), `NOR` (Nordland fylkeskommune) and `VOT` (Vestfold og Telemark) now resolve to names instead of showing a bare 3-letter code. Two of these appear in cross-authority feeds already.
+
+### Fixed
+- **🛡️ HTML sanitizer turned encoded text into live markup**: `HTMLParser` decodes character references before handing them over, and the sanitizer echoed them back raw — so an attribute that arrived safely encoded came out as a working event handler (`title="x&quot; onerror=&quot;alert(1)"` → `title="x" onerror="alert(1)"`). Attribute names, values and text are now re-escaped on output. Descriptions are publisher-authored, so this is worth having even though the feed comes via Entur. Verified against the live all-Norway feed: of 971 text fields exactly one changes, and only to encode a bare `&` in an image URL, which renders identically.
+- **🧱 One bad situation no longer discards the whole update**: parse errors were caught around the entire loop, so a single malformed situation aborted the pass and threw away every line's data for that cycle. Measured with one corrupted validity period: previously a bad entry early in the feed lost all 33 lines, now only its own line is affected. Errors are logged per situation with the `SituationNumber`.
+- **🔑 `ET-Client-Name` was still shared on discovery calls**: 2026.3.3 gave each installation a unique client name because Entur applies rate-limit quota per header value, but the operator- and line-discovery lookups still sent the shared name, so all installations remained pooled for those requests. They now send the installation-unique value too. (These use the journey-planner API, whose limits are much roomier than the 5 req/min SIRI-SX pool, so this was unlikely to have caused visible problems.)
+- **🏷️ Stale authority names corrected**: `TRO` is **Svipper** (rebranded from Troms fylkestrafikk), `NSB` is **Vy**, `SOF` is **Kringom**, `VYG` is **Vy Group** (previously "Vy", which collided with NSB), `VYX` is **Vy Express**, `NBU` is **Flybussen Connect**. Norwegian transport authorities rebrand and merge regularly while their codespace tag stays stable for continuity.
+- **📝 Malformed HTML edge cases**: valueless attributes no longer become `nowrap="None"`, implicitly-closed siblings are nested correctly (`<ul><li>a<li>b` now yields `<li>a</li><li>b</li>` rather than mis-nested `</li></li>`), and explicitly self-closed tags such as `<br/>` are handled.
+
+### Changed
+- **🔍 Unsupported situation types are now visible in logs**: situations that target only `StopPoints` or `VehicleJourneys` rather than a line network — stop closures and single-departure cancellations — are still not turned into sensor data, but they are logged at debug level with what they do affect, instead of being dropped silently. On a typical Skyss feed this is around 4 of 24 situations.
+- **🧹 Internal**: per-situation parsing extracted to `_parse_situation()`; `ET-Client-Name` defined once as `ET_CLIENT_NAME` and built once by `async_client_name()`; SIRI JSON field access hardened against the API's `{"value": x}`-versus-bare-scalar and object-versus-array inconsistencies.
+
+### Compatibility
+- All new attributes are additive — existing markdown cards, templates and automations continue to work unchanged
+- Publisher information comes from the `SituationNumber` codespace prefix, which is present on every situation (verified across the SKY, RUT, ATB and KOL feeds)
+- `GCO` has no published name anywhere in Entur's APIs or documentation, so it displays as `GCO`. It is a shared channel that operators publish through on an authority's behalf
+- Internal signature change for anyone forking: `async_get_operators()` and `async_get_lines_for_operator()` now take `hass` as their first argument
+
+### Documentation
+- **🤖 Agent guidance**: added `CLAUDE.md` and expanded `.github/copilot-instructions.md` with Entur's machine-readable documentation endpoints (`/llms.txt`, `/llms-full.txt`, and `.md` on any page — note these are at the site root, not under `/docs`) plus the API facts that are easy to get wrong, such as `ParticipantRef` not being the publisher and codespace owners living in `authorities` rather than `operators`.
+
 ## [2026.7.1]
 
 ### Added
