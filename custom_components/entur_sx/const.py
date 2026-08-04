@@ -85,41 +85,65 @@ STATUS_EXPIRED = "expired"
 # This mapping bridges that gap, allowing users to select their region by name
 # (e.g., "Sogn og Fjordane") rather than having to know the codespace identifier.
 #
-# Source: Official Entur codespace documentation + dynamic discovery from operators API
-# The codespace (3-letter code) is what's used in SIRI-SX datasetId parameter
+# Source: the "Available data streams" table in Entur's own real-time docs,
+# https://developer.entur.no/open-data/realtime.md  (synced 2026-08-04).
+# That table is authoritative for who OWNS a codespace.
+#
+# Do not "improve" these from the journey-planner operators API: it returns
+# individual operators inside a codespace, not the codespace owner, so it is
+# actively wrong for most entries — BRA gives "Forsvarsbygg Oscarsborgfergen",
+# INN "Fæmund II", MOR "Sundbåten", OST "Fredrikstad kommune", SOF
+# "Lustrabaatane", TEL "Telemarkskanalen", TRO "Svipper", VYG "Vy Tåg".
+# async_get_operators() falls back to that API name whenever a codespace is
+# missing here, which is why keeping this table complete matters.
+#
+# Names must not embed the 3-letter code: async_get_operators() renders them as
+# "{name} ({codespace})".
+# The codespace is what's used in the SIRI-SX datasetId parameter, and also the
+# prefix of every SituationNumber — see EnturSXApiClient._publisher().
 CODESPACE_NAMES = {
-    # Major regional transport authorities
+    # Regional transport authorities and national operators
     "AKT": "Agder Kollektivtrafikk",
     "ATB": "AtB",
+    "AVI": "Avinor",
+    "BNR": "SJ Nord via Bane NOR",
     "BRA": "Brakar",
+    "FIN": "Snelandia",
+    "FLT": "Flytoget",
     "GOA": "Go-Ahead Norge",
     "INN": "Innlandstrafikk",
     "KOL": "Kolumbus",
     "MOR": "FRAM",
-    "NBU": "Flybussen Connect",
+    "NBU": "Connect Bus Flybuss",
+    "NOR": "Nordland fylkeskommune",
+    "NSB": "Vy",
     "OST": "Østfold kollektivtrafikk",
     "RUT": "Ruter",
     "SJN": "SJ Nord",
     "SKY": "Skyss",
-    "SOF": "Sogn og Fjordane",  # Kringom regional authority
+    "SOF": "Kringom",
     "TEL": "Farte",
     "TRO": "Troms fylkestrafikk",
     "VKT": "VKT",
+    "VOT": "Vestfold og Telemark",
     "VYB": "Vy Bus4You",
-    "VYG": "Vy",
-    "VYX": "Vy Buss",
-    
-    # Codespaces found in SIRI-SX but not fully mapped.
+    "VYG": "Vy Group",
+    "VYX": "Vy Express",
+
+    # Codespaces that appear in SIRI-SX but have no published name anywhere.
     #
-    # GCO is not resolvable from any Entur API: it appears in neither the 275
-    # operators nor the 79 authorities returned by the journey-planner GraphQL,
-    # and there is no organisations endpoint.  It *is* a valid datasetId, and it
-    # publishes situations against SKY, NOR, FIN, KOL and ATB lines — i.e. it is
-    # a shared channel that operators publish through on an authority's behalf
-    # ("Mvh Fjord1 på vegner av Skyss").  Left as the bare code deliberately
-    # rather than guessing a company name; checked 2026-08-04.
+    # GCO is not resolvable by any means available.  Checked 2026-08-04:
+    #   - absent from the 275 operators and 79 authorities in journey-planner
+    #   - absent from the vehicles API's codespaces query, whose Codespace type
+    #     exposes only codespaceId — there is no name field to query
+    #   - absent from the "Available data streams" table above
+    #   - zero occurrences in the whole of developer.entur.no (llms-full.txt)
+    #   - api.entur.io/organisations/v1/organisations does not exist (404)
+    # It *is* a valid datasetId, publishing against SKY, NOR, FIN, KOL and ATB
+    # lines — a shared channel operators publish through on an authority's
+    # behalf ("Mvh Fjord1 på vegner av Skyss").  Left as the bare code
+    # deliberately rather than guessing a company name.
     "CTS": "CTS",
     "GCO": "GCO",
-    "NSB": "NSB",
 }
 
