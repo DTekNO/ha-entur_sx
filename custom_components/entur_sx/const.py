@@ -85,17 +85,30 @@ STATUS_EXPIRED = "expired"
 # This mapping bridges that gap, allowing users to select their region by name
 # (e.g., "Sogn og Fjordane") rather than having to know the codespace identifier.
 #
-# Source: the "Available data streams" table in Entur's own real-time docs,
-# https://developer.entur.no/open-data/realtime.md  (synced 2026-08-04).
-# That table is authoritative for who OWNS a codespace.
+# Sources, cross-checked 2026-08-04:
+#   - the "Available data streams" table at developer.entur.no/open-data/realtime.md
+#   - the journey-planner GraphQL `authorities` collection (live)
 #
-# Do not "improve" these from the journey-planner operators API: it returns
-# individual operators inside a codespace, not the codespace owner, so it is
-# actively wrong for most entries — BRA gives "Forsvarsbygg Oscarsborgfergen",
-# INN "Fæmund II", MOR "Sundbåten", OST "Fredrikstad kommune", SOF
-# "Lustrabaatane", TEL "Telemarkskanalen", TRO "Svipper", VYG "Vy Tåg".
-# async_get_operators() falls back to that API name whenever a codespace is
-# missing here, which is why keeping this table complete matters.
+# This table is a TIEBREAK, not a correction of the API.  A codespace legitimately
+# hosts several authorities — BRA holds both "Brakar" and the small
+# "Forsvarsbygg Oscarsborgfergen"; TEL holds "Farte" plus three ferry
+# authorities — so there is no single name to read off, and 6 of 24 codespaces
+# are ambiguous that way.  Where a canonical authority IS identifiable (its id
+# suffix matches the codespace, e.g. SKY:Authority:SKY, or it is the only one),
+# the API agrees with this table on 15 of 17 resolvable codespaces.
+#
+# Do not assume the API is wrong when it differs — it is live and this table is
+# a snapshot, so the API is often the MORE current of the two.  Both known
+# differences went against the static sources: TRO's sole authority is "Svipper"
+# (the current brand; both this table and Entur's own docs table still said
+# "Troms fylkestrafikk"), and NBU's is "Flybussen Connect".  Norwegian transport
+# authorities rebrand and merge regularly — NSB became Vy, Sogn og Fjordane was
+# reorganised into Kringom under Vestland — while the codespace tag is kept
+# stable for continuity.  So a mismatch here is far more likely to be this file
+# going stale than an error upstream.
+#
+# Note that async_get_operators() prefers this table over the API name, so a
+# wrong or stale entry SUPPRESSES the live value rather than supplementing it.
 #
 # Names must not embed the 3-letter code: async_get_operators() renders them as
 # "{name} ({codespace})".
@@ -114,7 +127,7 @@ CODESPACE_NAMES = {
     "INN": "Innlandstrafikk",
     "KOL": "Kolumbus",
     "MOR": "FRAM",
-    "NBU": "Connect Bus Flybuss",
+    "NBU": "Flybussen Connect",   # live authority name; docs table says "Connect Bus Flybuss"
     "NOR": "Nordland fylkeskommune",
     "NSB": "Vy",
     "OST": "Østfold kollektivtrafikk",
@@ -123,7 +136,7 @@ CODESPACE_NAMES = {
     "SKY": "Skyss",
     "SOF": "Kringom",
     "TEL": "Farte",
-    "TRO": "Troms fylkestrafikk",
+    "TRO": "Svipper",             # rebranded from Troms fylkestrafikk; sole TRO authority
     "VKT": "VKT",
     "VOT": "Vestfold og Telemark",
     "VYB": "Vy Bus4You",

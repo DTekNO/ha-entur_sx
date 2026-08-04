@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
+from html import escape
 from html.parser import HTMLParser
 import logging
 import os
@@ -77,8 +78,23 @@ def _map_transport_mode(api_mode: str | None, api_submode: str | None = None) ->
 
 
 class HTMLSanitizer(HTMLParser):
-    """Simple HTML parser to fix unclosed tags."""
-    
+    """Balance unclosed tags in feed-supplied HTML, re-escaping as it goes.
+
+    Publishers put real markup in Description (<br> and <a href> both occur in
+    the live feed), sometimes with unclosed tags, which breaks the card.
+
+    Note the escaping in handle_starttag/handle_data is load-bearing, not
+    cosmetic.  HTMLParser decodes character references before handing them over
+    (convert_charrefs defaults to True), so echoing values back verbatim turns
+    encoded text into live markup:
+
+        in   <a title="x&quot; onerror=&quot;alert(1)">
+        out  <a title="x" onerror="alert(1)">
+
+    i.e. a safely-encoded attribute became an event handler.  Everything
+    re-emitted here must therefore be escaped again.
+    """
+
     def __init__(self):
         super().__init__()
         self.result = []
@@ -91,13 +107,44 @@ class HTMLSanitizer(HTMLParser):
         self.self_closing = {'br', 'img', 'hr', 'input', 'meta', 'link'}
         # All tags we track
         self.closing_tags = self.block_tags | self.inline_tags
-    
+        # Tags HTML closes implicitly when a sibling opens.  Without this,
+        # "<ul><li>a<li>b" balanced to "<li>a<li>b</li></li>" — mis-nested, in
+        # the very case this class exists to repair.
+        self.implicit_close = {
+            'li': {'li'},
+            'p': {'p'},
+            'td': {'td', 'th'},
+            'th': {'td', 'th'},
+            'tr': {'tr', 'td', 'th'},
+            'option': {'option'},
+        }
+
     def handle_starttag(self, tag, attrs):
         """Handle opening tag."""
-        attr_str = ''.join(f' {name}="{value}"' for name, value in attrs)
-        self.result.append(f'<{tag}{attr_str}>')
+        # Close any sibling the HTML spec would close implicitly
+        for opener in self.implicit_close.get(tag, ()):
+            if opener in self.open_tags:
+                while self.open_tags and self.open_tags[-1] in self.implicit_close[tag]:
+                    closed = self.open_tags.pop()
+                    self.result.append(f'</{closed}>')
+                break
+
+        parts = []
+        for name, value in attrs:
+            if value is None:
+                parts.append(f' {escape(name, quote=True)}')   # valueless, e.g. <td nowrap>
+            else:
+                parts.append(f' {escape(name, quote=True)}="{escape(value, quote=True)}"')
+        self.result.append(f'<{tag}{"".join(parts)}>')
         if tag in self.closing_tags:
             self.open_tags.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        """Handle an explicitly self-closed tag (<br/>) without tracking it."""
+        self.handle_starttag(tag, attrs)
+        if tag in self.closing_tags and self.open_tags and self.open_tags[-1] == tag:
+            self.open_tags.pop()
+            self.result.append(f'</{tag}>')
     
     def handle_endtag(self, tag):
         """Handle closing tag."""
@@ -128,8 +175,8 @@ class HTMLSanitizer(HTMLParser):
                     self.result.append(f'</{tag}>')
     
     def handle_data(self, data):
-        """Handle text data."""
-        self.result.append(data)
+        """Handle text data, re-escaping the references HTMLParser decoded."""
+        self.result.append(escape(data, quote=False))
     
     def close_all(self):
         """Close any remaining open tags."""
