@@ -62,7 +62,9 @@ Reaching that means adding the remaining flat attributes to
 `entity_picture`, `travel_tag`).
 
 Before doing it, confirm the debugging use case is genuinely covered — see the
-caveat below.
+caveat below, and the rolling event log that resolves it. Stage 2 should not land
+until that log exists, because the loss is irreversible for any period already
+recorded.
 
 ### Stage 3 — remove pre-rendered markdown
 Retire entity-level `formatted_content`, per-alert `formatted_content`, and the
@@ -94,6 +96,69 @@ So stage 2 is safe for the *observability* goal, but only if the logging is
 actually enabled when it matters. Worth confirming the tracking log captures
 enough before dropping the attributes, since the loss is irreversible for any
 period already recorded.
+
+## Rolling event log (optional) — the thing that makes stage 2 safe
+
+Agreed as a separate, optional feature: keep a short rolling log of events so a
+failed parse or a missed capture can be back-tracked after the fact. This is the
+proper answer to the caveat above, and it should land **before** stage 2 drops
+attribute history.
+
+### Why it cannot simply capture every poll
+
+`requestor_id` is a fresh UUID on every fetch (`api.py`, in the fetch method),
+used only to keep pagination consistent *within* one cycle. Entur's
+`requestorId` can return only changes since the last request, but the
+integration deliberately does not use it that way — it needs full state each
+cycle, and reusing the id would make state reconstruction impossible.
+
+So every poll returns the **whole dataset**. Measured:
+
+| | situations | compact JSON | per situation |
+|---|---|---|---|
+| `datasetId=SKY` | 23 | 42 KiB | ~1.9 KiB |
+| all Norway (no filter) | 349 | 834 KiB | ~0.8 KiB |
+
+At the 120 s poll interval that is 720 polls/day, so storing each raw response
+would cost **~30 MiB/day for SKY alone — 418 MiB over 14 days**. Not acceptable.
+
+### Design that is affordable
+
+**Write on change, not on poll.** Compare the current situation set against the
+previous cycle by `situation_number` plus a content hash, and append only the
+differences. Situations turn over a few times a day per dataset, so this is
+kilobytes per day and a 1–2 week retention is trivially affordable. Two tiers,
+because they answer different questions:
+
+| Tier | When | Content | Answers |
+|---|---|---|---|
+| **filtered** | on every add/remove/change | one line per event: timestamp, `situation_number`, `publisher`, `status`, `summary` | "what was disrupted at 03:00, and when did it appear" |
+| **raw** | only on a parse failure | the raw JSON of *that one situation* (0.8–2 KiB) | "why did it break, and can I reproduce it" |
+
+The raw tier is the important one and cannot be substituted by the filtered tier:
+a parse failure by definition means the parsed form is unavailable or wrong, so
+only the original bytes let you reproduce it in a test. 2026.8.1 already logs a
+`WARNING` naming the `SituationNumber` it skipped — dumping that situation's raw
+JSON alongside is a small increment on work already done, and is probably the
+single highest-value piece of this feature.
+
+Much of the filtered tier already exists as the disruption tracking log
+(`TECHNICAL_DETAILS.md`), including an optional persistent file. Extending that
+rather than building something parallel is likely the cheaper route; what it
+lacks is the raw tier, rotation, and the new provenance fields.
+
+### Implementation notes
+
+- Rotating file under `hass.config.path("entur_sx/")`, e.g. 5 × 1 MiB, so
+  retention is bounded by size rather than a date sweep.
+- All file I/O in an executor job — never block the event loop.
+- Off by default; enabled per config entry or via the existing logger config.
+- The feed is public transport data, so there is no privacy concern in retaining
+  raw payloads. Situations are third-party authored and can contain HTML, so
+  anything that renders the log must escape it (see `HTMLSanitizer`).
+- Captured raw situations make good test fixtures — `_parse_response()` can be
+  driven directly against a saved response, which is how the 2026.8.1 parser
+  changes were verified.
 
 ## Appendix — verified replacement template
 
