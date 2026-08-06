@@ -33,16 +33,13 @@ With this integration you can create sensors for just the routes you are interes
 
 ### Installation with HACS (Recommended)
 
-1. Open HACS in your Home Assistant instance
-2. Click on "Integrations"
-3. Click the three dots in the top right corner
-4. Select "Custom repositories"
-5. Add the URL: `https://github.com/DTekNO/ha-entur_sx`
-6. Select category: "Integration"
-7. Click "Add"
-8. Search for "Entur Situation Exchange" in HACS
-9. Click "Download"
-10. Restart Home Assistant
+This integration is in the **HACS default repositories**, so no custom repository
+is needed.
+
+1. In Home Assistant, go to **HACS** > **Integrations**
+2. Search for **Entur Situation Exchange**
+3. Click on the integration, then click **Download**
+4. Restart Home Assistant
 
 ### Manual Installation
 
@@ -515,7 +512,7 @@ This project is licensed under the MIT License.
 - Data provided by [Entur AS](https://entur.no)
 
 <!-- Badge definitions -->
-[hacs-badge]: https://img.shields.io/badge/HACS-Custom-orange.svg
+[hacs-badge]: https://img.shields.io/badge/HACS-Default-blue.svg
 [hacs-url]: https://github.com/DTekNO/ha-entur_sx
 [hacs-validation-badge]: https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml/badge.svg
 [hacs-validation-url]: https://github.com/DTekNO/ha-entur_sx/actions/workflows/validate.yaml
