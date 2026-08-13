@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import EnturSXApiClient
 from .const import (
     BACKOFF_INITIAL,
+    CONF_LINES_TO_CHECK,
     BACKOFF_MAX,
     BACKOFF_MULTIPLIER,
     BACKOFF_RESET_AFTER,
@@ -56,7 +57,8 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         
         # Track active disruptions to detect changes
-        self._previous_disruptions: dict[str, set[str]] = {}
+        # line_ref -> {disruption key -> {"status", "summary", "valid_from"}}
+        self._previous_disruptions: dict[str, dict[str, dict[str, str]]] = {}
         self._first_disruption_check: bool = True
         
         # Throttle/back-off management
@@ -202,72 +204,94 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         raise UpdateFailed(f"Rate limit exceeded and no cached data: {err}") from err
     
-    def _track_disruption_changes(self, data: dict[str, Any]) -> None:
-        """Track when disruptions appear and disappear."""
-        current_disruptions: dict[str, set[str]] = {}
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Build current state
-        for line_ref, deviations in data.items():
-            if not deviations:
-                current_disruptions[line_ref] = set()
-                continue
-            
-            # Track unique disruption IDs (summary + status is unique enough)
-            disruption_ids = set()
-            for dev in deviations:
-                summary = dev.get("summary", "")
-                status = dev.get("status", "")
-                valid_from = dev.get("valid_from", "")
-                # Create unique ID
-                disruption_id = f"{summary[:50]}|{status}|{valid_from}"
-                disruption_ids.add(disruption_id)
-            
-            current_disruptions[line_ref] = disruption_ids
-        
-        # On the first check _previous_disruptions is empty, so every existing
-        # disruption would appear as "new". Log at DEBUG on startup to avoid
-        # flooding the log with disruptions that were already known.
-        log = _DISRUPTION_LOGGER.debug if self._first_disruption_check else _DISRUPTION_LOGGER.info
+    @property
+    def monitored_lines(self) -> set[str]:
+        """Lines some config entry asked for, and therefore has a sensor.
 
-        # Compare with previous state
-        for line_ref in current_disruptions:
-            current = current_disruptions.get(line_ref, set())
-            previous = self._previous_disruptions.get(line_ref, set())
-            
-            # New disruptions appeared
-            new_disruptions = current - previous
-            for disruption_id in new_disruptions:
-                parts = disruption_id.split("|")
-                summary = parts[0] if len(parts) > 0 else "Unknown"
-                status = parts[1] if len(parts) > 1 else "unknown"
-                valid_from = parts[2] if len(parts) > 2 else ""
-                
+        Computed on demand rather than registered at setup: one coordinator is shared
+        across every config entry (see the quota work in the API client), and entries
+        can be added, reconfigured or removed while it runs.
+        """
+        lines: set[str] = set()
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            merged = {**entry.data, **entry.options}
+            lines.update(merged.get(CONF_LINES_TO_CHECK) or [])
+        return lines
+
+    @staticmethod
+    def _disruption_key(dev: dict[str, Any]) -> str:
+        """Stable identity for one disruption, deliberately excluding its status.
+
+        The status used to be part of the key, so a disruption that merely changed
+        status — planned → open, open → expired — vanished under one key and reappeared
+        under another. It was reported as a removal *plus* an addition: two misleading
+        lines for one event, and about half the log volume.
+
+        `situation_number` is the feed's own identifier and what SIRI-SX intends for
+        this. It also keeps two publishers reporting the same real-world event as two
+        distinct disruptions, which is correct — see the line 1033 case in CLAUDE.md.
+        Older payloads without one fall back to summary plus validity start, which
+        survive a status change even if they are less unique.
+        """
+        situation_number = dev.get("situation_number")
+        if situation_number:
+            return str(situation_number)
+        return f"{(dev.get('summary') or '')[:50]}|{dev.get('valid_from') or ''}"
+
+    def _track_disruption_changes(self, data: dict[str, Any]) -> None:
+        """Log disruptions appearing, changing status, and disappearing.
+
+        Only lines with a sensor are logged at INFO. The feed covers the whole dataset,
+        so most of what arrives concerns lines the user never asked about — that was
+        nearly all of the log volume and none of it actionable. Those stay at DEBUG so
+        they remain available when investigating the feed itself.
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        monitored = self.monitored_lines
+
+        current_disruptions: dict[str, dict[str, dict[str, str]]] = {}
+        for line_ref, deviations in data.items():
+            entries: dict[str, dict[str, str]] = {}
+            for dev in deviations or []:
+                entries[self._disruption_key(dev)] = {
+                    "status": dev.get("status") or "",
+                    "summary": dev.get("summary") or "",
+                    "valid_from": dev.get("valid_from") or "",
+                }
+            current_disruptions[line_ref] = entries
+
+        for line_ref, current in current_disruptions.items():
+            previous = self._previous_disruptions.get(line_ref, {})
+
+            # On the first check everything looks new, so keep startup quiet.  A line
+            # without a sensor stays at debug however interesting its disruptions.
+            if self._first_disruption_check or line_ref not in monitored:
+                log = _DISRUPTION_LOGGER.debug
+            else:
+                log = _DISRUPTION_LOGGER.info
+
+            for key in current.keys() - previous.keys():
+                info = current[key]
                 log(
-                    "[%s] NEW disruption on %s (status: %s) - %s - "
-                    "valid from: %s",
-                    timestamp,
-                    line_ref,
-                    status,
-                    summary,
-                    valid_from,
+                    "[%s] NEW disruption on %s (status: %s) - %s - valid from: %s",
+                    timestamp, line_ref, info["status"], info["summary"],
+                    info["valid_from"],
                 )
-            
-            # Disruptions disappeared
-            removed_disruptions = previous - current
-            for disruption_id in removed_disruptions:
-                parts = disruption_id.split("|")
-                summary = parts[0] if len(parts) > 0 else "Unknown"
-                status = parts[1] if len(parts) > 1 else "unknown"
-                
+
+            for key in current.keys() & previous.keys():
+                was, now = previous[key]["status"], current[key]["status"]
+                if was != now:
+                    log(
+                        "[%s] CHANGED disruption on %s (%s → %s) - %s",
+                        timestamp, line_ref, was, now, current[key]["summary"],
+                    )
+
+            for key in previous.keys() - current.keys():
+                info = previous[key]
                 log(
                     "[%s] REMOVED disruption from %s (was: %s) - %s",
-                    timestamp,
-                    line_ref,
-                    status,
-                    summary,
+                    timestamp, line_ref, info["status"], info["summary"],
                 )
-        
-        # Update previous state
+
         self._previous_disruptions = current_disruptions
         self._first_disruption_check = False
