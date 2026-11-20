@@ -44,6 +44,11 @@ BACKOFF_MULTIPLIER = 2.5  # Exponential increase
 BACKOFF_MAX = 600  # Max 10 minutes
 BACKOFF_RESET_AFTER = 1800  # Reset to normal after 30 min of success
 
+# Transient failures (5xx, timeouts, connection errors): Entur is having a bad moment,
+# which is not ours to fix and not a reason to blank every sensor.
+STALE_DATA_MAX_AGE = 1800  # Keep serving the last good data for up to 30 min of failures
+TRANSIENT_BACKOFF_AFTER = 3  # Consecutive failures before polling less often
+
 # Icon options for summary sensors
 SUMMARY_ICON_OPTIONS = [
     "mdi:bus-alert",

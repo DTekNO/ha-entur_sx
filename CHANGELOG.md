@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **🌐 Entur outages no longer blank the sensors**: a 5xx, timeout or connection error now keeps the last data for up to 30 minutes instead of flipping every sensor to unavailable, logs one warning per run of failures instead of three errors per poll, and polls less often after three in a row (honouring `Retry-After`, capped at 10 minutes). Past 30 minutes the sensors go unavailable as before. Other 4xx errors still fail immediately.
+
 ## [2026.8.1]
 
 Alerts now say **who reported them**. When a line shows two near-identical

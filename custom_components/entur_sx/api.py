@@ -618,10 +618,12 @@ class EnturSXApiClient:
                 return self._parse_response(data)
 
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout fetching data from Entur API: %s", err)
+            # Logged by the coordinator, which knows whether this is the first failure
+            # of an episode or the tenth.
+            _LOGGER.debug("Timeout fetching data from Entur API: %s", err)
             raise
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error fetching data from Entur API: %s", err)
+            _LOGGER.debug("Error fetching data from Entur API: %s", err)
             raise
         except Exception as err:
             _LOGGER.error("Unexpected error fetching Entur data: %s", err, exc_info=True)

@@ -1,6 +1,7 @@
 """DataUpdateCoordinator for Entur Situation Exchange."""
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from datetime import datetime, timedelta
 import logging
@@ -20,6 +21,8 @@ from .const import (
     BACKOFF_MULTIPLIER,
     BACKOFF_RESET_AFTER,
     DOMAIN,
+    STALE_DATA_MAX_AGE,
+    TRANSIENT_BACKOFF_AFTER,
     UPDATE_INTERVAL,
 )
 
@@ -66,6 +69,10 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_success_time: datetime | None = None
         self._in_backoff = False
         self._cached_data: dict[str, Any] | None = None
+
+        # Transient failures (5xx, timeouts, connection errors) in the current run
+        self._failure_count = 0
+        self._failure_started: datetime | None = None
         
         # Request history tracking (for diagnostics when throttled)
         self._request_history: deque = deque(maxlen=10)
@@ -100,6 +107,18 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.update_interval = timedelta(seconds=UPDATE_INTERVAL)
                 _LOGGER.debug("Update interval reset to %d seconds", UPDATE_INTERVAL)
             
+            if self._failure_count:
+                _LOGGER.info(
+                    "Entur API recovered after %d failed poll(s) over %.0f min",
+                    self._failure_count,
+                    (datetime.now() - self._failure_started).total_seconds() / 60
+                    if self._failure_started else 0,
+                )
+                self._failure_count = 0
+                self._failure_started = None
+                if not self._in_backoff:
+                    self.update_interval = timedelta(seconds=UPDATE_INTERVAL)
+
             # Reset throttle count if enough time has passed
             if self._last_success_time:
                 time_since_success = (
@@ -137,12 +156,60 @@ class EnturSXDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if err.status == 429:
                 # Rate limit hit - apply back-off and dump history
                 return await self._handle_throttle(err)
+            if err.status >= 500:
+                # Entur's side. Not ours to fix, and not worth blanking every sensor for.
+                return self._handle_transient_failure(
+                    err, f"HTTP {err.status}", err.headers
+                )
             _LOGGER.error("Error updating Entur SX data: %s", err)
             raise UpdateFailed(f"Error communicating with Entur API: {err}") from err
+        except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+            # Timeouts, resets and DNS failures: the same kind of trouble as a 5xx.
+            return self._handle_transient_failure(err, type(err).__name__)
         except Exception as err:
             _LOGGER.error("Error updating Entur SX data: %s", err)
             raise UpdateFailed(f"Error communicating with Entur API: {err}") from err
     
+    def _handle_transient_failure(
+        self, err: Exception, reason: str, headers: Any = None
+    ) -> dict[str, Any]:
+        """Ride out a failure on Entur's side (5xx, timeout, connection error).
+
+        Serves the last good data for up to STALE_DATA_MAX_AGE, so a short outage does
+        not flip every sensor to unavailable and back — which is what 500s on a third of
+        the polls did one evening. Logs once per run of failures, not once per poll, and
+        polls less often after repeated failures. Past the age limit it raises, so
+        sensors do go unavailable rather than show hours-old data as current.
+        """
+        now = datetime.now()
+        self._failure_count += 1
+        if self._failure_count == 1:
+            self._failure_started = now
+            _LOGGER.warning(
+                "Entur API unavailable (%s); keeping the last data and retrying", reason
+            )
+        else:
+            _LOGGER.debug(
+                "Entur API still unavailable (%s), failure #%d: %s",
+                reason, self._failure_count, err,
+            )
+
+        if self._failure_count >= TRANSIENT_BACKOFF_AFTER:
+            delay = UPDATE_INTERVAL * 2 ** (self._failure_count - TRANSIENT_BACKOFF_AFTER + 1)
+            retry_after = headers.get("Retry-After") if headers is not None else None
+            if retry_after and str(retry_after).isdigit():
+                delay = max(delay, int(retry_after))
+            self.update_interval = timedelta(seconds=min(delay, BACKOFF_MAX))
+
+        age = (
+            (now - self._last_success_time).total_seconds()
+            if self._last_success_time else None
+        )
+        if self._cached_data is not None and age is not None and age <= STALE_DATA_MAX_AGE:
+            return self._cached_data
+
+        raise UpdateFailed(f"Entur API unavailable ({reason}) and no recent data") from err
+
     async def _handle_throttle(self, err: aiohttp.ClientResponseError) -> dict[str, Any]:
         """Handle 429 rate limit with exponential back-off and state preservation.
         
